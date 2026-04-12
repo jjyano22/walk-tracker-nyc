@@ -23,17 +23,7 @@ interface OverlandPayload {
 }
 
 export async function POST(request: Request) {
-  // Accept token from Authorization header, query param, or skip if not set
-  const authHeader = request.headers.get("Authorization");
-  const headerToken = authHeader?.replace("Bearer ", "").trim();
-  const { searchParams } = new URL(request.url);
-  const queryToken = searchParams.get("token")?.trim();
-  const token = headerToken || queryToken;
-  const expected = (process.env.OVERLAND_TOKEN || "").trim();
-
-  if (expected && token !== expected) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
-  }
+  // No auth required — personal single-user app
 
   try {
     const body: OverlandPayload = await request.json();
