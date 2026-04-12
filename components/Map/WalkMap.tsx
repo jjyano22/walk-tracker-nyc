@@ -148,29 +148,37 @@ export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
-    mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
+    // Fetch token from server to avoid build-time env inlining issues
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then(async (config) => {
+        if (!mapContainer.current || map.current) return;
 
-    const mapInstance = new mapboxgl.Map({
-      container: mapContainer.current,
-      style: "mapbox://styles/mapbox/dark-v11",
-      center: [-73.935242, 40.73061], // NYC center
-      zoom: 12,
-      pitch: 0,
-      bearing: 0,
-    });
+        mapboxgl.accessToken = config.mapboxToken;
 
-    mapInstance.addControl(new mapboxgl.NavigationControl(), "top-right");
+        const mapInstance = new mapboxgl.Map({
+          container: mapContainer.current,
+          style: "mapbox://styles/mapbox/dark-v11",
+          center: [-73.935242, 40.73061],
+          zoom: 12,
+        });
 
-    mapInstance.on("load", async () => {
-      map.current = mapInstance;
-      setLoaded(true);
-      await loadWalkedPaths(mapInstance);
-      await loadNeighborhoods(mapInstance);
-    });
+        mapInstance.addControl(new mapboxgl.NavigationControl(), "top-right");
+
+        mapInstance.on("load", async () => {
+          map.current = mapInstance;
+          setLoaded(true);
+          await loadWalkedPaths(mapInstance);
+          await loadNeighborhoods(mapInstance);
+        });
+      })
+      .catch((err) => console.error("Failed to load config:", err));
 
     return () => {
-      mapInstance.remove();
-      map.current = null;
+      if (map.current) {
+        map.current.remove();
+        map.current = null;
+      }
     };
   }, [loadWalkedPaths, loadNeighborhoods]);
 
