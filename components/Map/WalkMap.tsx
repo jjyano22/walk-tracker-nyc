@@ -84,10 +84,10 @@ export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
               id: "neighborhoods-fill", type: "fill", source: "neighborhoods",
               paint: {
                 "fill-color": ["interpolate", ["linear"], ["get", "coverage_pct"],
-                  0, "rgba(255,59,48,0.15)", 10, "rgba(255,149,0,0.25)",
-                  30, "rgba(255,204,0,0.3)", 60, "rgba(52,199,89,0.35)",
-                  90, "rgba(255,215,0,0.45)"],
-                "fill-opacity": 0.6,
+                  0, "rgba(0,0,0,0)", 1, "rgba(255,149,0,0.15)",
+                  10, "rgba(255,204,0,0.2)", 30, "rgba(255,204,0,0.3)",
+                  60, "rgba(52,199,89,0.35)", 90, "rgba(255,215,0,0.45)"],
+                "fill-opacity": 1,
               },
             }, "walked-paths-layer");
             map.addLayer({
