@@ -27,6 +27,12 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
+      <head>
+        <link
+          href="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.css"
+          rel="stylesheet"
+        />
+      </head>
       <body className="h-full bg-zinc-950 text-white">{children}</body>
     </html>
   );
