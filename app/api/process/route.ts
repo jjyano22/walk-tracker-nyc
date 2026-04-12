@@ -1,13 +1,7 @@
 import { query } from "@/lib/db";
 
 export async function POST(request: Request) {
-  const authHeader = request.headers.get("Authorization");
-  const token = authHeader?.replace("Bearer ", "");
-  const cronSecret = request.headers.get("x-vercel-cron");
-
-  if (!cronSecret && token !== process.env.OVERLAND_TOKEN) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
-  }
+  // No auth — personal app
 
   try {
     // Step 1: Fetch unprocessed GPS points
