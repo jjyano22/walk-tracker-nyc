@@ -30,7 +30,7 @@ function StatCard({
   );
 }
 
-export default function OverallStats({ stats }: { stats: Stats | null }) {
+export default function OverallStats({ stats, parksCount, parksTotal }: { stats: Stats | null; parksCount?: number; parksTotal?: number }) {
   if (!stats) {
     return (
       <div className="grid grid-cols-2 gap-3">
@@ -52,7 +52,10 @@ export default function OverallStats({ stats }: { stats: Stats | null }) {
         value={`${stats.neighborhoods_started}/${stats.total_neighborhoods}`}
       />
       <StatCard label="Best Coverage" value={stats.best_coverage_pct} unit="%" />
-      <StatCard label="GPS Points" value={stats.total_gps_points.toLocaleString()} />
+      <StatCard
+        label="Parks Visited"
+        value={parksCount != null && parksTotal != null ? `${parksCount}/${parksTotal}` : "..."}
+      />
     </div>
   );
 }

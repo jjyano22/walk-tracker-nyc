@@ -32,6 +32,7 @@ export default function Sidebar({ selectedNeighborhood, onNeighborhoodHover }: S
   const [collapsed, setCollapsed] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
   const [neighborhoods, setNeighborhoods] = useState<Neighborhood[]>([]);
+  const [parks, setParks] = useState<{ count: number; total: number; visited: Array<{ name: string; category: string }> } | null>(null);
 
   useEffect(() => {
     fetch("/api/stats")
@@ -42,6 +43,11 @@ export default function Sidebar({ selectedNeighborhood, onNeighborhoodHover }: S
     fetch("/api/neighborhoods")
       .then((r) => r.json())
       .then((data) => setNeighborhoods(data.neighborhoods || []))
+      .catch(console.error);
+
+    fetch("/api/parks")
+      .then((r) => r.json())
+      .then(setParks)
       .catch(console.error);
   }, []);
 
@@ -68,7 +74,7 @@ export default function Sidebar({ selectedNeighborhood, onNeighborhoodHover }: S
               Every step, every street, every neighborhood
             </p>
 
-            <OverallStats stats={stats} />
+            <OverallStats stats={stats} parksCount={parks?.count} parksTotal={parks?.total} />
 
             <div className="mt-6">
               <h2 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider mb-3">
