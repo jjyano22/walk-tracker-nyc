@@ -29,6 +29,7 @@ interface SidebarProps {
   selectedNeighborhood?: string | null;
   onNeighborhoodHover?: (code: string | null) => void;
   onNeighborhoodSelect?: (code: string) => void;
+  onBoroughChange?: (borough: string | null, codes: string[]) => void;
 }
 
 function SidebarBody({
@@ -126,6 +127,7 @@ export default function Sidebar({
   selectedNeighborhood,
   onNeighborhoodHover,
   onNeighborhoodSelect,
+  onBoroughChange,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState(false);
@@ -137,7 +139,15 @@ export default function Sidebar({
     visited: Array<{ name: string; category: string }>;
   } | null>(null);
   const [nextUp, setNextUp] = useState<NextUpData | null>(null);
-  const [selectedBorough, setSelectedBorough] = useState<string | null>(null);
+  const [selectedBorough, setSelectedBoroughState] = useState<string | null>(null);
+
+  const setSelectedBorough = (borough: string | null) => {
+    setSelectedBoroughState(borough);
+    const codes = borough
+      ? neighborhoods.filter((n) => n.borough === borough).map((n) => n.nta_code)
+      : [];
+    onBoroughChange?.(borough, codes);
+  };
 
   useEffect(() => {
     fetch("/api/stats")

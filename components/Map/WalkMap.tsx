@@ -7,6 +7,7 @@ interface WalkMapProps {
   onNeighborhoodClick?: (ntaCode: string, ntaName: string) => void;
   hoveredNeighborhood?: string | null;
   selectedNeighborhood?: string | null;
+  selectedBoroughCodes?: string[] | null;
 }
 
 type GeoFeature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, unknown>>;
@@ -48,10 +49,25 @@ function featureBBox(
   ];
 }
 
+function responsivePadding(): {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+} {
+  const isDesktop =
+    typeof window !== "undefined" &&
+    window.matchMedia("(min-width: 768px)").matches;
+  return isDesktop
+    ? { top: 60, bottom: 60, left: 60, right: 340 }
+    : { top: 60, bottom: 220, left: 40, right: 40 };
+}
+
 export default function WalkMap({
   onNeighborhoodClick,
   hoveredNeighborhood,
   selectedNeighborhood,
+  selectedBoroughCodes,
 }: WalkMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<mapboxgl.Map | null>(null);
@@ -280,19 +296,50 @@ export default function WalkMap({
     const bbox = featureBBox(feature);
     if (!bbox) return;
 
-    const isDesktop =
-      typeof window !== "undefined" &&
-      window.matchMedia("(min-width: 768px)").matches;
-    const padding = isDesktop
-      ? { top: 60, bottom: 60, left: 60, right: 340 }
-      : { top: 60, bottom: 220, left: 40, right: 40 };
-
     map.fitBounds(bbox, {
-      padding,
+      padding: responsivePadding(),
       duration: 800,
       maxZoom: 15,
     });
   }, [selectedNeighborhood, layersReady]);
+
+  // Fly to selected borough (union bbox of its NTAs)
+  const boroughCodesKey = (selectedBoroughCodes ?? []).join(",");
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !layersReady) return;
+    if (!selectedBoroughCodes || selectedBoroughCodes.length === 0) return;
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const code of selectedBoroughCodes) {
+      const feature = featuresByCode.current[code];
+      if (!feature) continue;
+      const bbox = featureBBox(feature);
+      if (!bbox) continue;
+      if (bbox[0][0] < minX) minX = bbox[0][0];
+      if (bbox[0][1] < minY) minY = bbox[0][1];
+      if (bbox[1][0] > maxX) maxX = bbox[1][0];
+      if (bbox[1][1] > maxY) maxY = bbox[1][1];
+    }
+    if (!isFinite(minX)) return;
+
+    map.fitBounds(
+      [
+        [minX, minY],
+        [maxX, maxY],
+      ],
+      {
+        padding: responsivePadding(),
+        duration: 800,
+        maxZoom: 13,
+      }
+    );
+    // boroughCodesKey provides a stable identity for the codes array
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boroughCodesKey, layersReady]);
 
   return (
     <>
