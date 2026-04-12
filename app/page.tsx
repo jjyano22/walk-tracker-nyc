@@ -15,6 +15,7 @@ export default function Home() {
       <WalkMap
         onNeighborhoodClick={(code) => setSelectedNeighborhood(code)}
         hoveredNeighborhood={hoveredNeighborhood}
+        selectedNeighborhood={selectedNeighborhood}
       />
       <Sidebar
         selectedNeighborhood={selectedNeighborhood}
