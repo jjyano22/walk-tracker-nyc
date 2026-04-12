@@ -32,9 +32,11 @@ function boroughColor(borough: string): string {
 export default function NeighborhoodList({
   neighborhoods,
   selectedCode,
+  onHover,
 }: {
   neighborhoods: Neighborhood[];
   selectedCode?: string | null;
+  onHover?: (code: string | null) => void;
 }) {
   if (neighborhoods.length === 0) {
     return (
@@ -57,7 +59,9 @@ export default function NeighborhoodList({
       {sorted.map((n) => (
         <div
           key={n.nta_code}
-          className={`p-3 rounded-lg border transition-colors ${
+          onMouseEnter={() => onHover?.(n.nta_code)}
+          onMouseLeave={() => onHover?.(null)}
+          className={`p-3 rounded-lg border transition-colors cursor-pointer ${
             selectedCode === n.nta_code
               ? "bg-zinc-800 border-zinc-600"
               : "bg-zinc-900/50 border-zinc-800/50 hover:bg-zinc-900 hover:border-zinc-700"

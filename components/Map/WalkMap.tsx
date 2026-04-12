@@ -4,10 +4,12 @@ import { useEffect, useRef, useState } from "react";
 
 interface WalkMapProps {
   onNeighborhoodClick?: (ntaCode: string, ntaName: string) => void;
+  hoveredNeighborhood?: string | null;
 }
 
-export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
+export default function WalkMap({ onNeighborhoodClick, hoveredNeighborhood }: WalkMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstance = useRef<any>(null);
   const [status, setStatus] = useState("Loading map...");
   const initialized = useRef(false);
   const onClickRef = useRef(onNeighborhoodClick);
@@ -41,6 +43,8 @@ export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
         });
 
         map.addControl(new mb.NavigationControl(), "top-right");
+
+        mapInstance.current = map;
 
         map.on("error", (e: any) => {
           console.error("Map error:", e);
@@ -95,6 +99,13 @@ export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
               paint: { "line-color": "rgba(255,255,255,0.2)", "line-width": 1 },
             }, "walked-paths-layer");
 
+            // Highlight layer for sidebar hover
+            map.addLayer({
+              id: "neighborhoods-highlight", type: "fill", source: "neighborhoods",
+              paint: { "fill-color": "rgba(255,255,255,0.12)", "fill-opacity": 1 },
+              filter: ["==", "NTA2020", ""],
+            }, "walked-paths-layer");
+
             map.on("click", "neighborhoods-fill", (e: any) => {
               if (e.features?.[0]) {
                 const p = e.features[0].properties;
@@ -119,6 +130,17 @@ export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
 
     return () => clearInterval(interval);
   }, []);
+
+  // Highlight hovered neighborhood from sidebar
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !map.isStyleLoaded() || !map.getLayer("neighborhoods-highlight")) return;
+    if (hoveredNeighborhood) {
+      map.setFilter("neighborhoods-highlight", ["==", "NTA2020", hoveredNeighborhood]);
+    } else {
+      map.setFilter("neighborhoods-highlight", ["==", "NTA2020", ""]);
+    }
+  }, [hoveredNeighborhood]);
 
   return (
     <>

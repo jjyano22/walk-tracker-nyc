@@ -25,9 +25,10 @@ interface Neighborhood {
 
 interface SidebarProps {
   selectedNeighborhood?: string | null;
+  onNeighborhoodHover?: (code: string | null) => void;
 }
 
-export default function Sidebar({ selectedNeighborhood }: SidebarProps) {
+export default function Sidebar({ selectedNeighborhood, onNeighborhoodHover }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
   const [neighborhoods, setNeighborhoods] = useState<Neighborhood[]>([]);
@@ -76,6 +77,7 @@ export default function Sidebar({ selectedNeighborhood }: SidebarProps) {
               <NeighborhoodList
                 neighborhoods={neighborhoods}
                 selectedCode={selectedNeighborhood}
+                onHover={onNeighborhoodHover}
               />
             </div>
           </div>
