@@ -23,8 +23,12 @@ interface OverlandPayload {
 }
 
 export async function POST(request: Request) {
+  // Accept token from Authorization header OR ?token= query param
   const authHeader = request.headers.get("Authorization");
-  const token = authHeader?.replace("Bearer ", "");
+  const headerToken = authHeader?.replace("Bearer ", "");
+  const { searchParams } = new URL(request.url);
+  const queryToken = searchParams.get("token");
+  const token = headerToken || queryToken;
 
   if (!token || token !== process.env.OVERLAND_TOKEN) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
