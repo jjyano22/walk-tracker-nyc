@@ -6,38 +6,8 @@ export async function GET(request: Request) {
   const before = searchParams.get("before");
 
   try {
-    // First try walked_segments (processed/snapped data)
-    const walkedCount = await query("SELECT COUNT(*) as cnt FROM walked_segments");
-
-    if (Number(walkedCount[0].cnt) > 0) {
-      const conditions: string[] = [];
-      if (after) conditions.push(`first_walked_at >= '${after}'`);
-      if (before) conditions.push(`first_walked_at <= '${before}'`);
-
-      const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
-      const rows = await query(`
-        SELECT osm_way_id, ST_AsGeoJSON(geom) as geometry, nta_code,
-               length_meters, walk_count, first_walked_at
-        FROM walked_segments ${where}
-      `);
-
-      const features = rows.map((row) => ({
-        type: "Feature" as const,
-        geometry: JSON.parse(row.geometry as string),
-        properties: {
-          osm_way_id: row.osm_way_id,
-          nta_code: row.nta_code,
-          length_meters: row.length_meters,
-          walk_count: row.walk_count,
-          first_walked_at: row.first_walked_at,
-        },
-      }));
-
-      return Response.json({ type: "FeatureCollection", features });
-    }
-
-    // Fallback: return raw GPS points as lines
+    // Always return raw GPS points as lines (accurate paths)
+    // Walked segments are used only for coverage stats, not display
     const conditions: string[] = [];
     if (after) conditions.push(`timestamp >= '${after}'`);
     if (before) conditions.push(`timestamp <= '${before}'`);
