@@ -19,6 +19,7 @@ export default function Home() {
       <Sidebar
         selectedNeighborhood={selectedNeighborhood}
         onNeighborhoodHover={setHoveredNeighborhood}
+        onNeighborhoodSelect={setSelectedNeighborhood}
       />
     </div>
   );
