@@ -32,6 +32,7 @@ export default function RootLayout({
           href="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.css"
           rel="stylesheet"
         />
+        <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"></script>
       </head>
       <body className="h-full bg-zinc-950 text-white">{children}</body>
     </html>

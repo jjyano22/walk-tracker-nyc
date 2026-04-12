@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import mapboxgl from "mapbox-gl";
+
+// Use mapboxgl from CDN (loaded via script tag in layout.tsx)
+// This avoids Turbopack/webpack worker bundling issues
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare const mapboxgl: any;
 
 interface WalkMapProps {
   onNeighborhoodClick?: (ntaCode: string, ntaName: string) => void;
@@ -9,7 +13,8 @@ interface WalkMapProps {
 
 export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<mapboxgl.Map | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const map = useRef<any>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const onClickRef = useRef(onNeighborhoodClick);
@@ -17,6 +22,12 @@ export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
 
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
+
+    // Wait for mapboxgl to be available from CDN
+    if (typeof mapboxgl === "undefined") {
+      setError("Mapbox GL not loaded");
+      return;
+    }
 
     let cancelled = false;
 
@@ -36,7 +47,7 @@ export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
 
         m.addControl(new mapboxgl.NavigationControl(), "top-right");
 
-        m.on("error", (e) => {
+        m.on("error", (e: { error?: { message?: string } }) => {
           console.error("Mapbox error:", e.error);
           setError(e.error?.message || "Map error");
         });
@@ -121,7 +132,8 @@ export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
               "walked-paths-layer"
             );
 
-            m.on("click", "neighborhoods-fill", (e) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            m.on("click", "neighborhoods-fill", (e: any) => {
               if (e.features?.[0]) {
                 const props = e.features[0].properties!;
                 const code = props.NTA2020 || props.nta2020;
