@@ -4,8 +4,11 @@ import { useEffect, useRef, useState } from "react";
 
 // Use mapboxgl from CDN (loaded via script tag in layout.tsx)
 // This avoids Turbopack/webpack worker bundling issues
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-declare const mapboxgl: any;
+// mapboxgl loaded from CDN via next/script in layout.tsx
+// Access via window.mapboxgl
+function getMapbox() {
+  return (window as any).mapboxgl;
+}
 
 interface WalkMapProps {
   onNeighborhoodClick?: (ntaCode: string, ntaName: string) => void;
@@ -23,29 +26,41 @@ export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
-    // Wait for mapboxgl to be available from CDN
-    if (typeof mapboxgl === "undefined") {
-      setError("Mapbox GL not loaded");
-      return;
-    }
-
     let cancelled = false;
 
+    // Wait for mapboxgl to be available from CDN
+    function waitForMapbox(cb: () => void, retries = 20) {
+      if (typeof window !== "undefined" && (window as any).mapboxgl) {
+        cb();
+      } else if (retries > 0) {
+        setTimeout(() => waitForMapbox(cb, retries - 1), 200);
+      } else {
+        setError("Mapbox GL failed to load from CDN");
+      }
+    }
+
+    waitForMapbox(() => {
+      if (cancelled) return;
+      initMap();
+    });
+
+    function initMap() {
     fetch("/api/config")
       .then((r) => r.json())
       .then((config) => {
         if (cancelled || !mapContainer.current) return;
 
-        mapboxgl.accessToken = config.mapboxToken;
+        const mb = getMapbox();
+        mb.accessToken = config.mapboxToken;
 
-        const m = new mapboxgl.Map({
+        const m = new mb.Map({
           container: mapContainer.current,
           style: "mapbox://styles/mapbox/dark-v11",
           center: [-73.935242, 40.73061],
           zoom: 12,
         });
 
-        m.addControl(new mapboxgl.NavigationControl(), "top-right");
+        m.addControl(new mb.NavigationControl(), "top-right");
 
         m.on("error", (e: { error?: { message?: string } }) => {
           console.error("Mapbox error:", e.error);
@@ -140,7 +155,7 @@ export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
                 const name = props.NTAName || props.ntaname || code;
                 onClickRef.current?.(code, name);
 
-                new mapboxgl.Popup({ className: "dark-popup" })
+                new (getMapbox()).Popup({ className: "dark-popup" })
                   .setLngLat(e.lngLat)
                   .setHTML(
                     `<div style="color:#fff;font-size:14px"><strong>${name}</strong><br/>Coverage: ${(props.coverage_pct || 0).toFixed(1)}%</div>`
@@ -164,6 +179,7 @@ export default function WalkMap({ onNeighborhoodClick }: WalkMapProps) {
         console.error("Failed to init map:", err);
         setError("Failed to initialize map");
       });
+    } // end initMap
 
     return () => {
       cancelled = true;

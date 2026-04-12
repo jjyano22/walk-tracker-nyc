@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -32,9 +33,14 @@ export default function RootLayout({
           href="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.css"
           rel="stylesheet"
         />
-        <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"></script>
       </head>
-      <body className="h-full bg-zinc-950 text-white">{children}</body>
+      <body className="h-full bg-zinc-950 text-white">
+        <Script
+          src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"
+          strategy="beforeInteractive"
+        />
+        {children}
+      </body>
     </html>
   );
 }
