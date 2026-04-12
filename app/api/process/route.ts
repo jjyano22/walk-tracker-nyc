@@ -30,7 +30,7 @@ export async function POST(request: Request) {
                 ST_AsGeoJSON(geom) as geometry,
                 ST_Distance(geom, ST_MakePoint($1, $2)::geography) as distance
          FROM street_segments
-         WHERE ST_DWithin(geom, ST_MakePoint($1, $2)::geography, 30)
+         WHERE ST_DWithin(geom, ST_MakePoint($1, $2)::geography, 15)
          ORDER BY distance ASC
          LIMIT 1`,
         [lng, lat]
