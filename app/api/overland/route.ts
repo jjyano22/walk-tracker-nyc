@@ -1,4 +1,5 @@
 import { query } from "@/lib/db";
+import { isWithinHome } from "@/lib/home";
 
 interface OverlandLocation {
   type: "Feature";
@@ -33,7 +34,7 @@ export async function POST(request: Request) {
       return Response.json({ result: "ok" });
     }
 
-    // Filter to walking activity and reasonable accuracy
+    // Filter to walking activity, reasonable accuracy, and outside home area
     const walkingLocations = locations.filter((loc) => {
       const motion = loc.properties?.motion || [];
       const accuracy = loc.properties?.horizontal_accuracy || 999;
@@ -42,7 +43,10 @@ export async function POST(request: Request) {
         motion.includes("on_foot") ||
         motion.includes("running") ||
         motion.length === 0;
-      return isWalking && accuracy < 50;
+      if (!isWalking || accuracy >= 50) return false;
+      const [lng, lat] = loc.geometry.coordinates;
+      if (isWithinHome(lat, lng)) return false;
+      return true;
     });
 
     if (walkingLocations.length === 0) {

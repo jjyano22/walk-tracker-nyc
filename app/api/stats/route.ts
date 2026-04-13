@@ -1,4 +1,5 @@
 import { query } from "@/lib/db";
+import { homeExclusionSql } from "@/lib/home";
 
 export async function GET() {
   try {
@@ -10,9 +11,15 @@ export async function GET() {
       FROM neighborhood_stats
     `);
 
-    const [pointCount] = await query("SELECT COUNT(*) as total_points FROM gps_points");
+    const homeFilter = homeExclusionSql();
 
-    // Calculate actual walked distance from GPS points using PostGIS
+    const [pointCount] = await query(
+      `SELECT COUNT(*) as total_points FROM gps_points WHERE ${homeFilter}`
+    );
+
+    // Calculate actual walked distance from GPS points using PostGIS.
+    // Home-area points are excluded before the window function so the
+    // LEAD jumps across them and the home scribble doesn't count.
     const [distance] = await query(`
       SELECT COALESCE(SUM(seg_distance), 0) as total_meters FROM (
         SELECT
@@ -21,6 +28,7 @@ export async function GET() {
             LEAD(geom) OVER (ORDER BY timestamp)
           ) as seg_distance
         FROM gps_points
+        WHERE ${homeFilter}
       ) sub
       WHERE seg_distance < 100
     `);

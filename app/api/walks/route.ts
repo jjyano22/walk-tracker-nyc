@@ -1,4 +1,5 @@
 import { query } from "@/lib/db";
+import { homeExclusionSql } from "@/lib/home";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -8,11 +9,11 @@ export async function GET(request: Request) {
   try {
     // Always return raw GPS points as lines (accurate paths)
     // Walked segments are used only for coverage stats, not display
-    const conditions: string[] = [];
+    const conditions: string[] = [homeExclusionSql()];
     if (after) conditions.push(`timestamp >= '${after}'`);
     if (before) conditions.push(`timestamp <= '${before}'`);
 
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const where = `WHERE ${conditions.join(" AND ")}`;
 
     const rows = await query(`
       SELECT lat, lng, timestamp FROM gps_points ${where} ORDER BY timestamp ASC

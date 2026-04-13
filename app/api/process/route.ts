@@ -1,14 +1,15 @@
 import { query } from "@/lib/db";
+import { homeExclusionSql } from "@/lib/home";
 
 export async function POST() {
   // No auth — personal app
 
   try {
-    // Step 1: Fetch unprocessed GPS points
+    // Step 1: Fetch unprocessed GPS points (excluding home area)
     const points = await query(`
       SELECT id, lat, lng, timestamp
       FROM gps_points
-      WHERE is_processed = FALSE
+      WHERE is_processed = FALSE AND ${homeExclusionSql()}
       ORDER BY timestamp ASC
       LIMIT 5000
     `);
