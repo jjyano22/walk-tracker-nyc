@@ -5,6 +5,7 @@ import OverallStats from "./OverallStats";
 import NeighborhoodList from "./NeighborhoodList";
 import BoroughRollup from "./BoroughRollup";
 import NextUp, { NextUpData } from "./NextUp";
+import RefreshButton from "./RefreshButton";
 
 interface Stats {
   total_km: string;
@@ -61,9 +62,11 @@ function SidebarBody({
   return (
     <div className="p-4">
       <h1 className="text-xl font-bold text-white mb-1">Walk Tracker NYC</h1>
-      <p className="text-sm text-zinc-500 mb-6">
+      <p className="text-sm text-zinc-500 mb-4">
         Every step, every street, every neighborhood
       </p>
+
+      <RefreshButton />
 
       <OverallStats
         stats={stats}
