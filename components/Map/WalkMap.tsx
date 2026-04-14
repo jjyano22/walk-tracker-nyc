@@ -124,12 +124,13 @@ export default function WalkMap({
             const walkGeo = await walkRes.json();
             map.addSource("walked-paths", { type: "geojson", data: walkGeo });
 
-            // Walk segments (foot travel)
+            // Walk segments (foot travel). Legacy filter syntax to match
+            // the neighborhoods layers elsewhere in this file.
             map.addLayer({
               id: "walked-paths-layer",
               type: "line",
               source: "walked-paths",
-              filter: ["==", ["get", "mode"], "walk"],
+              filter: ["==", "mode", "walk"],
               paint: {
                 "line-color": "#00ffd5",
                 "line-width": 3,
@@ -144,7 +145,7 @@ export default function WalkMap({
               id: "walked-paths-transit-layer",
               type: "line",
               source: "walked-paths",
-              filter: ["==", ["get", "mode"], "transit"],
+              filter: ["==", "mode", "transit"],
               paint: {
                 "line-color": "#a78bfa",
                 "line-width": 2,

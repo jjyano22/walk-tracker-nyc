@@ -1,17 +1,22 @@
 import { query } from "@/lib/db";
 import { homeExclusionSql } from "@/lib/home";
 
+// Always evaluate at request time — no caching, so tuning thresholds
+// takes effect on the next page load.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 // Speed threshold separating walking from transit.
 // Normal walking ~1.4 m/s, brisk walk ~1.8 m/s, jogging ~3 m/s.
-// Anything averaging faster than 2.5 m/s across a segment is almost
-// certainly not on foot.
-const TRANSIT_SPEED_MPS = 2.5;
+// Anything averaging faster than 2 m/s across a segment is almost
+// certainly not on foot for a casual walker.
+const TRANSIT_SPEED_MPS = 2;
 
 // Long single-segment jumps are also treated as transit regardless of
 // computed speed — e.g. the phone loses GPS in a tunnel and the next
-// fix is miles away. 250m between consecutive fixes is well outside
+// fix is miles away. 150m between consecutive fixes is well outside
 // normal Overland sampling at walking pace.
-const TRANSIT_JUMP_METERS = 250;
+const TRANSIT_JUMP_METERS = 150;
 
 // Gap between consecutive GPS fixes at which we end the current feature
 // and start a new one (so we don't draw a line across hours of inactivity).
@@ -158,7 +163,25 @@ export async function GET(request: Request) {
     }
     flush();
 
-    return Response.json({ type: "FeatureCollection", features });
+    const summary = {
+      total_features: features.length,
+      walk_features: features.filter((f) => f.properties.mode === "walk").length,
+      transit_features: features.filter((f) => f.properties.mode === "transit")
+        .length,
+      total_points: points.length,
+      thresholds: {
+        transit_speed_mps: TRANSIT_SPEED_MPS,
+        transit_jump_meters: TRANSIT_JUMP_METERS,
+        session_gap_seconds: SESSION_GAP_SECONDS,
+      },
+    };
+    console.log("[walks] summary", summary);
+
+    return Response.json({
+      type: "FeatureCollection",
+      features,
+      _summary: summary,
+    });
   } catch (error) {
     console.error("Walks API error:", error);
     return Response.json(
