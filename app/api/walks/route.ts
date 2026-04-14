@@ -2,9 +2,16 @@ import { query } from "@/lib/db";
 import { homeExclusionSql } from "@/lib/home";
 
 // Speed threshold separating walking from transit.
-// Normal walking ~1.4 m/s, jogging ~3 m/s. Anything faster than 4 m/s
-// (~9 mph) is almost certainly not on foot.
-const TRANSIT_SPEED_MPS = 4;
+// Normal walking ~1.4 m/s, brisk walk ~1.8 m/s, jogging ~3 m/s.
+// Anything averaging faster than 2.5 m/s across a segment is almost
+// certainly not on foot.
+const TRANSIT_SPEED_MPS = 2.5;
+
+// Long single-segment jumps are also treated as transit regardless of
+// computed speed — e.g. the phone loses GPS in a tunnel and the next
+// fix is miles away. 250m between consecutive fixes is well outside
+// normal Overland sampling at walking pace.
+const TRANSIT_JUMP_METERS = 250;
 
 // Gap between consecutive GPS fixes at which we end the current feature
 // and start a new one (so we don't draw a line across hours of inactivity).
@@ -26,6 +33,10 @@ interface WalkFeature {
     start_time: string;
     end_time: string;
     point_count: number;
+    distance_m: number;
+    duration_s: number;
+    avg_speed_mps: number;
+    max_speed_mps: number;
   };
 }
 
@@ -67,6 +78,9 @@ export async function GET(request: Request) {
     let currentCoords: number[][] = [];
     let currentTimes: string[] = [];
     let currentMode: Mode | null = null;
+    let currentDistance = 0;
+    let currentDuration = 0;
+    let currentMaxSpeed = 0;
 
     const flush = () => {
       if (currentCoords.length >= 2 && currentMode !== null) {
@@ -78,12 +92,22 @@ export async function GET(request: Request) {
             start_time: currentTimes[0],
             end_time: currentTimes[currentTimes.length - 1],
             point_count: currentCoords.length,
+            distance_m: Math.round(currentDistance),
+            duration_s: Math.round(currentDuration),
+            avg_speed_mps:
+              currentDuration > 0
+                ? Number((currentDistance / currentDuration).toFixed(2))
+                : 0,
+            max_speed_mps: Number(currentMaxSpeed.toFixed(2)),
           },
         });
       }
       currentCoords = [];
       currentTimes = [];
       currentMode = null;
+      currentDistance = 0;
+      currentDuration = 0;
+      currentMaxSpeed = 0;
     };
 
     // Walk through consecutive points, classifying each segment and
@@ -104,7 +128,12 @@ export async function GET(request: Request) {
 
       const distM = haversineMeters(a, b);
       const speedMps = dtSec > 0 ? distM / dtSec : 0;
-      const segMode: Mode = speedMps > TRANSIT_SPEED_MPS ? "transit" : "walk";
+      // Classify as transit if the segment is either too fast OR covers
+      // more ground than normal walking sampling can explain.
+      const segMode: Mode =
+        speedMps > TRANSIT_SPEED_MPS || distM > TRANSIT_JUMP_METERS
+          ? "transit"
+          : "walk";
 
       if (currentMode === null) {
         // Starting a fresh feature — seed with point `a`.
@@ -123,6 +152,9 @@ export async function GET(request: Request) {
 
       currentCoords.push([b.lng, b.lat]);
       currentTimes.push(b.timestamp);
+      currentDistance += distM;
+      currentDuration += dtSec;
+      if (speedMps > currentMaxSpeed) currentMaxSpeed = speedMps;
     }
     flush();
 
