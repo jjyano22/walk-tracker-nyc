@@ -123,14 +123,33 @@ export default function WalkMap({
             const walkRes = await fetch("/api/walks");
             const walkGeo = await walkRes.json();
             map.addSource("walked-paths", { type: "geojson", data: walkGeo });
+
+            // Walk segments (foot travel)
             map.addLayer({
               id: "walked-paths-layer",
               type: "line",
               source: "walked-paths",
+              filter: ["==", ["get", "mode"], "walk"],
               paint: {
                 "line-color": "#00ffd5",
                 "line-width": 3,
                 "line-opacity": 0.85,
+              },
+            });
+
+            // Transit segments (subway, car, bus, etc.) — anything faster
+            // than walking speed. Rendered thinner, dashed, muted purple
+            // so they're visible but clearly not "walked".
+            map.addLayer({
+              id: "walked-paths-transit-layer",
+              type: "line",
+              source: "walked-paths",
+              filter: ["==", ["get", "mode"], "transit"],
+              paint: {
+                "line-color": "#a78bfa",
+                "line-width": 2,
+                "line-opacity": 0.55,
+                "line-dasharray": [2, 2],
               },
             });
           } catch (e) {
