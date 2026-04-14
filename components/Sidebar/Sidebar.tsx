@@ -6,6 +6,7 @@ import NeighborhoodList from "./NeighborhoodList";
 import BoroughRollup from "./BoroughRollup";
 import NextUp, { NextUpData } from "./NextUp";
 import RefreshButton from "./RefreshButton";
+import DebugInfo from "./DebugInfo";
 
 interface Stats {
   total_km: string;
@@ -122,6 +123,8 @@ function SidebarBody({
           onHover={onNeighborhoodHover}
         />
       </div>
+
+      <DebugInfo />
     </div>
   );
 }
