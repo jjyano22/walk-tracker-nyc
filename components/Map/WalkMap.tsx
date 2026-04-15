@@ -124,33 +124,50 @@ export default function WalkMap({
             const walkGeo = await walkRes.json();
             map.addSource("walked-paths", { type: "geojson", data: walkGeo });
 
-            // Walk segments (foot travel). Legacy filter syntax to match
-            // the neighborhoods layers elsewhere in this file.
+            // One segment per feature, colored on a gradient from cyan
+            // (slow) to purple (fast) via data-driven paint on speed_mps.
+            // No classification — slow segments look like walks, fast
+            // segments (subway, car, bus) visibly stand out.
             map.addLayer({
               id: "walked-paths-layer",
               type: "line",
               source: "walked-paths",
-              filter: ["==", "mode", "walk"],
               paint: {
-                "line-color": "#00ffd5",
-                "line-width": 3,
-                "line-opacity": 0.85,
-              },
-            });
-
-            // Transit segments (subway, car, bus, etc.) — anything faster
-            // than walking speed. Rendered thinner, dashed, muted purple
-            // so they're visible but clearly not "walked".
-            map.addLayer({
-              id: "walked-paths-transit-layer",
-              type: "line",
-              source: "walked-paths",
-              filter: ["==", "mode", "transit"],
-              paint: {
-                "line-color": "#a78bfa",
-                "line-width": 2,
-                "line-opacity": 0.55,
-                "line-dasharray": [2, 2],
+                "line-color": [
+                  "interpolate",
+                  ["linear"],
+                  ["get", "speed_mps"],
+                  0,
+                  "#00ffd5", // slow: turquoise
+                  1.5,
+                  "#00ffd5", // still walking pace
+                  2.5,
+                  "#7dd3fc", // fast walk / jog: light blue
+                  4,
+                  "#a78bfa", // bike / fast: purple
+                  10,
+                  "#a78bfa", // transit: capped purple
+                ],
+                "line-width": [
+                  "interpolate",
+                  ["linear"],
+                  ["get", "speed_mps"],
+                  0,
+                  3,
+                  2.5,
+                  2.5,
+                  4,
+                  2,
+                ],
+                "line-opacity": [
+                  "interpolate",
+                  ["linear"],
+                  ["get", "speed_mps"],
+                  0,
+                  0.85,
+                  4,
+                  0.55,
+                ],
               },
             });
           } catch (e) {

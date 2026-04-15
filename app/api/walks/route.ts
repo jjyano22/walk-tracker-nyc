@@ -1,25 +1,14 @@
 import { query } from "@/lib/db";
 import { homeExclusionSql } from "@/lib/home";
 
-// Always evaluate at request time — no caching, so tuning thresholds
-// takes effect on the next page load.
+// Always evaluate at request time — no CDN caching of this endpoint,
+// so changes to the data or the client-side rendering take effect
+// immediately on the next page load.
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// Speed threshold separating walking from transit.
-// Normal walking ~1.4 m/s, brisk walk ~1.8 m/s, jogging ~3 m/s.
-// Anything averaging faster than 2 m/s across a segment is almost
-// certainly not on foot for a casual walker.
-const TRANSIT_SPEED_MPS = 2;
-
-// Long single-segment jumps are also treated as transit regardless of
-// computed speed — e.g. the phone loses GPS in a tunnel and the next
-// fix is miles away. 150m between consecutive fixes is well outside
-// normal Overland sampling at walking pace.
-const TRANSIT_JUMP_METERS = 150;
-
-// Gap between consecutive GPS fixes at which we end the current feature
-// and start a new one (so we don't draw a line across hours of inactivity).
+// Gap between consecutive GPS fixes at which we stop drawing a line.
+// Anything longer is almost certainly phone-off or signal-loss noise.
 const SESSION_GAP_SECONDS = 5 * 60;
 
 interface Point {
@@ -28,20 +17,15 @@ interface Point {
   timestamp: string;
 }
 
-type Mode = "walk" | "transit";
-
-interface WalkFeature {
+interface SegmentFeature {
   type: "Feature";
   geometry: { type: "LineString"; coordinates: number[][] };
   properties: {
-    mode: Mode;
-    start_time: string;
-    end_time: string;
-    point_count: number;
+    speed_mps: number;
     distance_m: number;
     duration_s: number;
-    avg_speed_mps: number;
-    max_speed_mps: number;
+    start_time: string;
+    end_time: string;
   };
 }
 
@@ -79,44 +63,14 @@ export async function GET(request: Request) {
       timestamp: r.timestamp as string,
     }));
 
-    const features: WalkFeature[] = [];
-    let currentCoords: number[][] = [];
-    let currentTimes: string[] = [];
-    let currentMode: Mode | null = null;
-    let currentDistance = 0;
-    let currentDuration = 0;
-    let currentMaxSpeed = 0;
+    // Emit one feature per consecutive-point pair, tagged with its speed.
+    // The map paints each segment on a color gradient from cyan (slow) to
+    // purple (fast), so subway and car rides visually separate from foot
+    // travel without any binary classification or tunable threshold.
+    const features: SegmentFeature[] = [];
+    let maxSpeed = 0;
+    let fastCount = 0; // >2 m/s — anything faster than brisk walking
 
-    const flush = () => {
-      if (currentCoords.length >= 2 && currentMode !== null) {
-        features.push({
-          type: "Feature",
-          geometry: { type: "LineString", coordinates: currentCoords },
-          properties: {
-            mode: currentMode,
-            start_time: currentTimes[0],
-            end_time: currentTimes[currentTimes.length - 1],
-            point_count: currentCoords.length,
-            distance_m: Math.round(currentDistance),
-            duration_s: Math.round(currentDuration),
-            avg_speed_mps:
-              currentDuration > 0
-                ? Number((currentDistance / currentDuration).toFixed(2))
-                : 0,
-            max_speed_mps: Number(currentMaxSpeed.toFixed(2)),
-          },
-        });
-      }
-      currentCoords = [];
-      currentTimes = [];
-      currentMode = null;
-      currentDistance = 0;
-      currentDuration = 0;
-      currentMaxSpeed = 0;
-    };
-
-    // Walk through consecutive points, classifying each segment and
-    // emitting a feature whenever the mode changes or a gap appears.
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i];
       const b = points[i + 1];
@@ -124,56 +78,39 @@ export async function GET(request: Request) {
       const dtSec =
         (new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()) /
         1000;
-
-      if (dtSec > SESSION_GAP_SECONDS) {
-        // Long pause: close the current feature without bridging the gap.
-        flush();
-        continue;
-      }
+      if (dtSec <= 0 || dtSec > SESSION_GAP_SECONDS) continue;
 
       const distM = haversineMeters(a, b);
-      const speedMps = dtSec > 0 ? distM / dtSec : 0;
-      // Classify as transit if the segment is either too fast OR covers
-      // more ground than normal walking sampling can explain.
-      const segMode: Mode =
-        speedMps > TRANSIT_SPEED_MPS || distM > TRANSIT_JUMP_METERS
-          ? "transit"
-          : "walk";
+      if (distM <= 0) continue;
 
-      if (currentMode === null) {
-        // Starting a fresh feature — seed with point `a`.
-        currentMode = segMode;
-        currentCoords.push([a.lng, a.lat]);
-        currentTimes.push(a.timestamp);
-      } else if (currentMode !== segMode) {
-        // Mode change at point `a`. Close the previous feature (which
-        // already ends with `a`) and start a new one that begins at `a`,
-        // so the two LineStrings touch at the junction.
-        flush();
-        currentMode = segMode;
-        currentCoords.push([a.lng, a.lat]);
-        currentTimes.push(a.timestamp);
-      }
+      const speedMps = distM / dtSec;
+      if (speedMps > maxSpeed) maxSpeed = speedMps;
+      if (speedMps > 2) fastCount += 1;
 
-      currentCoords.push([b.lng, b.lat]);
-      currentTimes.push(b.timestamp);
-      currentDistance += distM;
-      currentDuration += dtSec;
-      if (speedMps > currentMaxSpeed) currentMaxSpeed = speedMps;
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [a.lng, a.lat],
+            [b.lng, b.lat],
+          ],
+        },
+        properties: {
+          speed_mps: Number(speedMps.toFixed(2)),
+          distance_m: Math.round(distM),
+          duration_s: Math.round(dtSec),
+          start_time: a.timestamp,
+          end_time: b.timestamp,
+        },
+      });
     }
-    flush();
 
     const summary = {
-      total_features: features.length,
-      walk_features: features.filter((f) => f.properties.mode === "walk").length,
-      transit_features: features.filter((f) => f.properties.mode === "transit")
-        .length,
+      total_segments: features.length,
       total_points: points.length,
-      thresholds: {
-        transit_speed_mps: TRANSIT_SPEED_MPS,
-        transit_jump_meters: TRANSIT_JUMP_METERS,
-        session_gap_seconds: SESSION_GAP_SECONDS,
-      },
+      max_speed_mps: Number(maxSpeed.toFixed(2)),
+      fast_segments: fastCount,
     };
     console.log("[walks] summary", summary);
 

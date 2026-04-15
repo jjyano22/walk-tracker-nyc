@@ -3,15 +3,10 @@
 import { useEffect, useState } from "react";
 
 interface WalksSummary {
-  total_features: number;
-  walk_features: number;
-  transit_features: number;
+  total_segments: number;
   total_points: number;
-  thresholds: {
-    transit_speed_mps: number;
-    transit_jump_meters: number;
-    session_gap_seconds: number;
-  };
+  max_speed_mps: number;
+  fast_segments: number;
 }
 
 export default function DebugInfo() {
@@ -36,25 +31,15 @@ export default function DebugInfo() {
       {summary && (
         <>
           <div>
-            features: <span className="text-zinc-400">{summary.total_features}</span>{" "}
-            (walk{" "}
-            <span className="text-emerald-400">{summary.walk_features}</span> /
-            transit{" "}
-            <span className="text-purple-400">{summary.transit_features}</span>)
+            segments: <span className="text-zinc-400">{summary.total_segments}</span>{" "}
+            (fast <span className="text-purple-400">{summary.fast_segments}</span>)
           </div>
           <div>
             points: <span className="text-zinc-400">{summary.total_points}</span>
           </div>
           <div>
-            thresholds: speed&gt;
-            <span className="text-zinc-400">
-              {summary.thresholds.transit_speed_mps}
-            </span>
-            m/s, dist&gt;
-            <span className="text-zinc-400">
-              {summary.thresholds.transit_jump_meters}
-            </span>
-            m
+            max speed:{" "}
+            <span className="text-zinc-400">{summary.max_speed_mps}</span> m/s
           </div>
         </>
       )}
