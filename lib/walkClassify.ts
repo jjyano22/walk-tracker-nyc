@@ -10,16 +10,27 @@ import { query } from "@/lib/db";
 // segment chain is broken. Matches SESSION_GAP_SECONDS elsewhere.
 export const SESSION_GAP_SECONDS = 5 * 60;
 
-// Classification thresholds. Tuned so:
-//  * GPS jitter in urban canyons (tiny < 30m jumps) stays labeled walk
-//    regardless of computed speed.
-//  * Brief speed spikes under 500m total (sprint, scooter drive-by,
-//    short car hop) stay walk.
-//  * Real multi-block transit (subway, car, bike) gets run_type=transit.
-const RUN_FAST_MPS = 2;
-const RUN_MIN_SEG_METERS = 30;
+// Classification thresholds.
+//   * Short segments (< 100m) are kept as walk no matter the speed —
+//     catches GPS jitter in urban canyons that would otherwise look
+//     fast due to tiny time deltas.
+//   * Long segments (>= 500m) are transit regardless of speed —
+//     catches the classic subway pattern where the phone loses GPS
+//     in the tunnel and reacquires it several blocks away, emitting
+//     a single long straight line segment.
+//   * Medium segments (100-500m) are transit only if they're
+//     clearly above walking pace (> 2.5 m/s ≈ 5.6 mph, above a
+//     brisk walk / light jog).
+const SEG_WALK_MAX_METERS = 100;
+const SEG_TRANSIT_MIN_METERS = 500;
+const SEG_FAST_MPS = 2.5;
+
+// Run-based upgrade: if a segment is adjacent to a transit segment
+// (same session, small gap) and itself is above walking pace, promote
+// it to transit too. Catches GPS samples that fall during a subway
+// ride's station-slowdown where the individual segment is short but
+// neighbors are clearly transit.
 const RUN_CONTIGUOUS_GAP_SECONDS = 60;
-const TRANSIT_RUN_MIN_METERS = 500;
 
 export interface RawPoint {
   id?: number;
@@ -131,48 +142,52 @@ export function classifySegments(
     });
   }
 
-  // Run detection: group contiguous fast segments, size them by total
-  // distance, and label the whole run walk or transit.
-  let i = 0;
-  while (i < segments.length) {
-    const s = segments[i];
-    const isFast =
-      s.speedMps > RUN_FAST_MPS && s.distanceM >= RUN_MIN_SEG_METERS;
-    if (!isFast) {
-      s.runType = "walk";
-      s.runTotalM = s.distanceM;
-      i += 1;
-      continue;
-    }
+  // Pass 1: per-segment classification.
+  for (const s of segments) {
+    s.runType = classifySingleSegment(s);
+    s.runTotalM = s.distanceM;
+  }
 
-    let runEnd = i;
-    let runTotal = s.distanceM;
-    while (runEnd + 1 < segments.length) {
-      const curr = segments[runEnd];
-      const next = segments[runEnd + 1];
-      const gap =
-        (new Date(next.startTime).getTime() -
-          new Date(curr.endTime).getTime()) /
-        1000;
-      const nextFast =
-        next.speedMps > RUN_FAST_MPS &&
-        next.distanceM >= RUN_MIN_SEG_METERS;
-      if (nextFast && gap <= RUN_CONTIGUOUS_GAP_SECONDS) {
-        runEnd += 1;
-        runTotal += next.distanceM;
-      } else break;
+  // Pass 2: promote fast-ish segments that neighbor transit segments.
+  // Subway rides through a station slow-down produce short segments
+  // bracketed by long tunnel jumps; we want those to be transit too.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < segments.length; i++) {
+      const s = segments[i];
+      if (s.runType === "transit") continue;
+      if (s.speedMps <= 1.5) continue; // clearly walking, don't promote
+      const prev = i > 0 ? segments[i - 1] : null;
+      const next = i < segments.length - 1 ? segments[i + 1] : null;
+      const prevTransit =
+        prev &&
+        prev.runType === "transit" &&
+        gapSeconds(prev, s) <= RUN_CONTIGUOUS_GAP_SECONDS;
+      const nextTransit =
+        next &&
+        next.runType === "transit" &&
+        gapSeconds(s, next) <= RUN_CONTIGUOUS_GAP_SECONDS;
+      if (prevTransit || nextTransit) {
+        s.runType = "transit";
+        changed = true;
+      }
     }
-
-    const runType: RunType =
-      runTotal >= TRANSIT_RUN_MIN_METERS ? "transit" : "walk";
-    for (let j = i; j <= runEnd; j++) {
-      segments[j].runType = runType;
-      segments[j].runTotalM = runTotal;
-    }
-    i = runEnd + 1;
   }
 
   return segments;
+}
+
+function classifySingleSegment(s: Segment): RunType {
+  if (s.distanceM < SEG_WALK_MAX_METERS) return "walk";
+  if (s.distanceM >= SEG_TRANSIT_MIN_METERS) return "transit";
+  return s.speedMps > SEG_FAST_MPS ? "transit" : "walk";
+}
+
+function gapSeconds(a: Segment, b: Segment): number {
+  return (
+    (new Date(b.startTime).getTime() - new Date(a.endTime).getTime()) / 1000
+  );
 }
 
 /**
