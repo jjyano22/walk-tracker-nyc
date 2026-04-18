@@ -5,9 +5,7 @@ import { useEffect, useState } from "react";
 interface WalksSummary {
   total_segments: number;
   total_points: number;
-  max_speed_mps: number;
-  manual_segments: number;
-  mode_overrides: number;
+  excluded_segments: number;
 }
 
 export default function DebugInfo() {
@@ -30,33 +28,11 @@ export default function DebugInfo() {
       {error && <div className="text-red-400">{error}</div>}
       {!summary && !error && <div>loading…</div>}
       {summary && (
-        <>
-          <div>
-            segments:{" "}
-            <span className="text-zinc-400">{summary.total_segments}</span>
-            {summary.manual_segments > 0 && (
-              <>
-                {" "}
-                (manual{" "}
-                <span className="text-purple-400">
-                  {summary.manual_segments}
-                </span>
-                )
-              </>
-            )}
-          </div>
-          <div>
-            points: <span className="text-zinc-400">{summary.total_points}</span>
-          </div>
-          <div>
-            max speed:{" "}
-            <span className="text-zinc-400">{summary.max_speed_mps}</span> m/s
-          </div>
-          <div>
-            mode overrides:{" "}
-            <span className="text-zinc-400">{summary.mode_overrides}</span>
-          </div>
-        </>
+        <div>
+          walk: <span className="text-zinc-400">{summary.total_segments}</span>{" "}
+          excluded: <span className="text-zinc-400">{summary.excluded_segments}</span>{" "}
+          pts: <span className="text-zinc-400">{summary.total_points}</span>
+        </div>
       )}
     </div>
   );
