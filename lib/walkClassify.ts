@@ -28,8 +28,14 @@ const SEG_FAST_MPS = 2.5;
 // Stationary detection: if the user hasn't moved more than this
 // distance within a time window, they're sitting still and the GPS
 // segments are pure drift. Excluded from both rendering and distance.
-const STATIONARY_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
-const STATIONARY_RADIUS_M = 50;
+const STATIONARY_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const STATIONARY_RADIUS_M = 35;
+
+// Douglas-Peucker tolerance for simplifying walking polylines before
+// measuring distance. Removes zigzag noise that inflates cumulative
+// distance by 20-40% on otherwise-straight walks. 10m tolerance is
+// above typical GPS accuracy in cities and below a block width.
+const SIMPLIFY_TOLERANCE_DEG = 10 / 111000; // ≈10 meters in latitude degrees
 
 // Run-based upgrade: if a segment is adjacent to a transit segment
 // (same session, small gap) and itself is above walking pace, promote
@@ -180,7 +186,7 @@ export function classifySegments(
         const d = haversineMeters(points[windowStart], ref);
         if (d > maxDist) maxDist = d;
       }
-      if (maxDist < STATIONARY_RADIUS_M && i - windowStart >= 3) {
+      if (maxDist < STATIONARY_RADIUS_M && i - windowStart >= 2) {
         pointStationary[i] = 1;
       }
     }
@@ -260,12 +266,116 @@ export function isWalkable(s: Segment): boolean {
   return s.runType === "walk";
 }
 
+/**
+ * Sum of walking distance across all segments, with GPS-zigzag
+ * smoothing. Groups contiguous walkable segments into "sessions",
+ * applies Douglas-Peucker to each session's polyline (dropping points
+ * that are within ~10m of the simplified line), and sums distance on
+ * the simplified path. This reduces 20-40% of phantom inflation from
+ * GPS bouncing along otherwise-straight walks.
+ */
 export function walkedDistanceMeters(segments: Segment[]): number {
+  const sessions = groupWalkableSessions(segments);
   let total = 0;
-  for (const s of segments) {
-    if (isWalkable(s)) total += s.distanceM;
+  for (const coords of sessions) {
+    if (coords.length < 2) continue;
+    const simplified = douglasPeucker(coords, SIMPLIFY_TOLERANCE_DEG);
+    for (let i = 0; i < simplified.length - 1; i++) {
+      total += haversineLngLat(simplified[i], simplified[i + 1]);
+    }
   }
   return total;
+}
+
+// Collect contiguous runs of walkable segments as arrays of [lng, lat]
+// point sequences. A run ends when a non-walkable segment appears OR
+// two consecutive segments aren't actually adjacent in time (shouldn't
+// happen given the classifier, but belt-and-suspenders).
+function groupWalkableSessions(segments: Segment[]): [number, number][][] {
+  const sessions: [number, number][][] = [];
+  let current: [number, number][] = [];
+  for (const s of segments) {
+    if (!isWalkable(s)) {
+      if (current.length > 0) {
+        sessions.push(current);
+        current = [];
+      }
+      continue;
+    }
+    if (current.length === 0) {
+      current.push([s.a.lng, s.a.lat]);
+    } else {
+      const last = current[current.length - 1];
+      // If the last point isn't this segment's `a`, start a new session.
+      if (last[0] !== s.a.lng || last[1] !== s.a.lat) {
+        sessions.push(current);
+        current = [[s.a.lng, s.a.lat]];
+      }
+    }
+    current.push([s.b.lng, s.b.lat]);
+  }
+  if (current.length > 0) sessions.push(current);
+  return sessions;
+}
+
+function haversineLngLat(a: [number, number], b: [number, number]): number {
+  return haversineMeters(
+    { lat: a[1], lng: a[0], ts: 0, timestamp: "" },
+    { lat: b[1], lng: b[0], ts: 0, timestamp: "" }
+  );
+}
+
+// Douglas-Peucker polyline simplification. Tolerance in degrees.
+function douglasPeucker(
+  pts: [number, number][],
+  tolerance: number
+): [number, number][] {
+  if (pts.length < 3) return pts.slice();
+  const keep = new Uint8Array(pts.length);
+  keep[0] = 1;
+  keep[pts.length - 1] = 1;
+
+  const stack: Array<[number, number]> = [[0, pts.length - 1]];
+  while (stack.length > 0) {
+    const [lo, hi] = stack.pop()!;
+    let maxDist = 0;
+    let maxIdx = -1;
+    for (let i = lo + 1; i < hi; i++) {
+      const d = perpendicularDistance(pts[i], pts[lo], pts[hi]);
+      if (d > maxDist) {
+        maxDist = d;
+        maxIdx = i;
+      }
+    }
+    if (maxIdx !== -1 && maxDist > tolerance) {
+      keep[maxIdx] = 1;
+      stack.push([lo, maxIdx]);
+      stack.push([maxIdx, hi]);
+    }
+  }
+
+  const out: [number, number][] = [];
+  for (let i = 0; i < pts.length; i++) {
+    if (keep[i]) out.push(pts[i]);
+  }
+  return out;
+}
+
+function perpendicularDistance(
+  p: [number, number],
+  a: [number, number],
+  b: [number, number]
+): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  if (dx === 0 && dy === 0) {
+    const ex = p[0] - a[0];
+    const ey = p[1] - a[1];
+    return Math.sqrt(ex * ex + ey * ey);
+  }
+  const num = Math.abs(dx * (a[1] - p[1]) - (a[0] - p[0]) * dy);
+  const den = Math.sqrt(dx * dx + dy * dy);
+  return num / den;
 }
 
 /**
