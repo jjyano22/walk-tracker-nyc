@@ -33,9 +33,10 @@ const STATIONARY_RADIUS_M = 35;
 
 // Douglas-Peucker tolerance for simplifying walking polylines before
 // measuring distance. Removes zigzag noise that inflates cumulative
-// distance by 20-40% on otherwise-straight walks. 10m tolerance is
-// above typical GPS accuracy in cities and below a block width.
-const SIMPLIFY_TOLERANCE_DEG = 10 / 111000; // ≈10 meters in latitude degrees
+// distance by 20-40% on otherwise-straight walks. 20m is well below
+// a NYC block width (~80m), so real turns are preserved while GPS
+// jitter is dropped.
+const SIMPLIFY_TOLERANCE_DEG = 20 / 111000; // ≈20 meters in latitude degrees
 
 // Run-based upgrade: if a segment is adjacent to a transit segment
 // (same session, small gap) and itself is above walking pace, promote
@@ -382,6 +383,20 @@ function perpendicularDistance(
  * Returns the indexes (into the original points array) of points that
  * are part of at least one walkable segment. Used by /api/parks.
  */
+/**
+ * Raw (unsimplified) walked distance — sum of haversine distance of
+ * every walkable segment. Useful for diagnostics: compare against
+ * walkedDistanceMeters() to see how much Douglas-Peucker smoothing
+ * cut away GPS-jitter inflation.
+ */
+export function walkedDistanceRawMeters(segments: Segment[]): number {
+  let total = 0;
+  for (const s of segments) {
+    if (isWalkable(s)) total += s.distanceM;
+  }
+  return total;
+}
+
 export function walkablePointIndices(segments: Segment[]): Set<number> {
   const ids = new Set<number>();
   for (const s of segments) {

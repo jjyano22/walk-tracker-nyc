@@ -4,6 +4,8 @@ import {
   classifySegments,
   isWalkable,
   loadModes,
+  walkedDistanceMeters,
+  walkedDistanceRawMeters,
   type RawPoint,
 } from "@/lib/walkClassify";
 
@@ -63,10 +65,22 @@ export async function GET(request: Request) {
       },
     }));
 
+    const rawMeters = walkedDistanceRawMeters(allSegments);
+    const smoothedMeters = walkedDistanceMeters(allSegments);
+    const stationaryCount = allSegments.filter(
+      (s) => s.runType === "stationary"
+    ).length;
+    const transitCount = allSegments.filter(
+      (s) => s.runType === "transit"
+    ).length;
     const summary = {
       total_segments: features.length,
       total_points: points.length,
       excluded_segments: allSegments.length - walkSegments.length,
+      stationary_segments: stationaryCount,
+      transit_segments: transitCount,
+      raw_miles: Number((rawMeters / 1609.34).toFixed(2)),
+      smoothed_miles: Number((smoothedMeters / 1609.34).toFixed(2)),
     };
     console.log("[walks] summary", summary);
 
