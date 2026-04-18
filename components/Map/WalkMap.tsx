@@ -124,30 +124,45 @@ export default function WalkMap({
             const walkGeo = await walkRes.json();
             map.addSource("walked-paths", { type: "geojson", data: walkGeo });
 
-            // One segment per feature, colored on a gradient from cyan
-            // (slow) to purple (fast) via data-driven paint on speed_mps.
-            // No classification — slow segments look like walks, fast
-            // segments (subway, car, bus) visibly stand out.
+            // One segment per feature. When the user has manually
+            // classified the segment (mode == walk|subway|car|bike) the
+            // matching color wins; otherwise the line is painted on a
+            // speed-based gradient (cyan = slow → purple = fast).
+            const modeColor: mapboxgl.ExpressionSpecification = [
+              "match",
+              ["coalesce", ["get", "mode"], ""],
+              "walk",
+              "#00ffd5",
+              "subway",
+              "#a78bfa",
+              "car",
+              "#fb923c",
+              "bike",
+              "#f472b6",
+              // default: gradient by speed_mps
+              [
+                "interpolate",
+                ["linear"],
+                ["get", "speed_mps"],
+                0,
+                "#00ffd5",
+                1.5,
+                "#00ffd5",
+                2.5,
+                "#7dd3fc",
+                4,
+                "#a78bfa",
+                10,
+                "#a78bfa",
+              ],
+            ];
+
             map.addLayer({
               id: "walked-paths-layer",
               type: "line",
               source: "walked-paths",
               paint: {
-                "line-color": [
-                  "interpolate",
-                  ["linear"],
-                  ["get", "speed_mps"],
-                  0,
-                  "#00ffd5", // slow: turquoise
-                  1.5,
-                  "#00ffd5", // still walking pace
-                  2.5,
-                  "#7dd3fc", // fast walk / jog: light blue
-                  4,
-                  "#a78bfa", // bike / fast: purple
-                  10,
-                  "#a78bfa", // transit: capped purple
-                ],
+                "line-color": modeColor,
                 "line-width": [
                   "interpolate",
                   ["linear"],
@@ -159,16 +174,103 @@ export default function WalkMap({
                   4,
                   2,
                 ],
-                "line-opacity": [
-                  "interpolate",
-                  ["linear"],
-                  ["get", "speed_mps"],
-                  0,
-                  0.85,
-                  4,
-                  0.55,
-                ],
+                "line-opacity": 0.85,
               },
+            });
+
+            // Wider invisible hit layer so tapping a thin line on mobile
+            // is forgiving. Clicks on this layer open the mode popup.
+            map.addLayer({
+              id: "walked-paths-hit",
+              type: "line",
+              source: "walked-paths",
+              paint: {
+                "line-color": "#000",
+                "line-opacity": 0,
+                "line-width": 22,
+              },
+            });
+
+            map.on(
+              "click",
+              "walked-paths-hit",
+              (e: mapboxgl.MapLayerMouseEvent) => {
+                const feature = e.features?.[0];
+                if (!feature) return;
+                const p = (feature.properties ?? {}) as Record<string, unknown>;
+                const currentMode =
+                  typeof p.mode === "string" && p.mode ? p.mode : null;
+                const speed = Number(p.speed_mps) || 0;
+                const dist = Number(p.distance_m) || 0;
+                const dur = Number(p.duration_s) || 0;
+                const startTs = String(p.start_time ?? "");
+                const endTs = String(p.end_time ?? "");
+
+                const popupNode = document.createElement("div");
+                popupNode.className = "walk-mode-popup";
+                popupNode.innerHTML = `
+                  <div style="color:#fff;font-size:13px;min-width:180px">
+                    <div style="color:#a1a1aa;font-size:11px;margin-bottom:8px">
+                      ${speed.toFixed(1)} m/s · ${dist}m · ${dur}s
+                      ${currentMode ? `<br/><span style="color:#e5e7eb">Tagged: <strong>${currentMode}</strong></span>` : ""}
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                      <button data-mode="walk"   style="padding:6px 8px;background:#00ffd520;border:1px solid #00ffd5;color:#00ffd5;border-radius:6px;cursor:pointer">Walk</button>
+                      <button data-mode="subway" style="padding:6px 8px;background:#a78bfa20;border:1px solid #a78bfa;color:#a78bfa;border-radius:6px;cursor:pointer">Subway</button>
+                      <button data-mode="car"    style="padding:6px 8px;background:#fb923c20;border:1px solid #fb923c;color:#fb923c;border-radius:6px;cursor:pointer">Car</button>
+                      <button data-mode="bike"   style="padding:6px 8px;background:#f472b620;border:1px solid #f472b6;color:#f472b6;border-radius:6px;cursor:pointer">Bike</button>
+                    </div>
+                    <button data-mode="auto" style="margin-top:6px;width:100%;padding:6px 8px;background:transparent;border:1px solid #3f3f46;color:#a1a1aa;border-radius:6px;cursor:pointer;font-size:11px">Reset to auto</button>
+                  </div>
+                `;
+
+                const popup = new mb.Popup({ className: "dark-popup" })
+                  .setLngLat(e.lngLat)
+                  .setDOMContent(popupNode)
+                  .addTo(map);
+
+                popupNode.addEventListener("click", async (ev) => {
+                  const target = ev.target as HTMLElement;
+                  const btn = target.closest("button[data-mode]");
+                  if (!btn) return;
+                  const mode = btn.getAttribute("data-mode");
+                  if (!mode || !startTs || !endTs) return;
+                  btn.setAttribute("disabled", "true");
+                  (btn as HTMLButtonElement).style.opacity = "0.5";
+                  try {
+                    const res = await fetch("/api/walks/mode", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        start_ts: startTs,
+                        end_ts: endTs,
+                        mode,
+                      }),
+                    });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    popup.remove();
+                    // Refresh the source so the new color shows.
+                    const refreshed = await fetch("/api/walks");
+                    const refreshedGeo = await refreshed.json();
+                    const src = map.getSource(
+                      "walked-paths"
+                    ) as mapboxgl.GeoJSONSource | undefined;
+                    if (src) src.setData(refreshedGeo);
+                  } catch (err) {
+                    console.error("mode update failed:", err);
+                    (btn as HTMLButtonElement).style.border =
+                      "1px solid #ef4444";
+                    btn.textContent = "Failed";
+                  }
+                });
+              }
+            );
+
+            map.on("mouseenter", "walked-paths-hit", () => {
+              map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", "walked-paths-hit", () => {
+              map.getCanvas().style.cursor = "";
             });
           } catch (e) {
             console.error("walks error:", e);

@@ -34,7 +34,8 @@ export async function POST(request: Request) {
       return Response.json({ result: "ok" });
     }
 
-    // Filter to walking activity, reasonable accuracy, and outside home area
+    // Filter to walking activity, reasonable accuracy, and outside home area.
+    // Subway rides are kept so they can be reclassified manually in the UI.
     const walkingLocations = locations.filter((loc) => {
       const motion = loc.properties?.motion || [];
       const accuracy = loc.properties?.horizontal_accuracy || 999;

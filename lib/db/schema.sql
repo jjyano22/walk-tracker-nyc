@@ -50,6 +50,20 @@ CREATE TABLE IF NOT EXISTS walked_segments (
 CREATE INDEX IF NOT EXISTS idx_walked_segments_geom ON walked_segments USING GIST(geom);
 CREATE INDEX IF NOT EXISTS idx_walked_segments_nta ON walked_segments(nta_code);
 
+-- Manual mode overrides: user clicks a segment on the map and tags a
+-- time range as walk / subway / car / etc. Overlapping rows resolve
+-- newest-wins via created_at.
+CREATE TABLE IF NOT EXISTS gps_modes (
+  id BIGSERIAL PRIMARY KEY,
+  start_ts TIMESTAMPTZ NOT NULL,
+  end_ts TIMESTAMPTZ NOT NULL,
+  mode TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_gps_modes_range ON gps_modes (start_ts, end_ts);
+CREATE INDEX IF NOT EXISTS idx_gps_modes_created_at ON gps_modes (created_at DESC);
+
 -- Pre-computed neighborhood statistics
 CREATE TABLE IF NOT EXISTS neighborhood_stats (
   nta_code VARCHAR(10) PRIMARY KEY,
