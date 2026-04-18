@@ -1,5 +1,11 @@
 import { query } from "@/lib/db";
-import { ensureModesTable, walkableSql } from "@/lib/modes";
+import { homeExclusionSql } from "@/lib/home";
+import {
+  classifySegments,
+  loadModes,
+  walkablePointIndices,
+  type RawPoint,
+} from "@/lib/walkClassify";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -61,13 +67,41 @@ function loadParks(): ParkFeature[] {
 
 export async function GET() {
   try {
-    await ensureModesTable();
-
-    // Only count points that weren't manually tagged as transit — e.g.
-    // a subway that rolls under a park shouldn't mark it as "visited".
-    const points = await query(
-      `SELECT DISTINCT lat, lng FROM gps_points WHERE ${walkableSql("timestamp")}`
+    // Classify all points and keep only those part of a walkable
+    // segment. Auto-detected transit runs (subway, car, bike rides)
+    // and manually-tagged transit are both filtered out — a subway
+    // under Prospect Park shouldn't mark it as "visited".
+    const rows = await query(
+      `SELECT lat, lng, timestamp FROM gps_points
+       WHERE ${homeExclusionSql()} ORDER BY timestamp ASC`
     );
+    const allPoints: RawPoint[] = (
+      rows as unknown as Array<{
+        lat: string | number;
+        lng: string | number;
+        timestamp: string;
+      }>
+    ).map((r) => ({
+      lat: Number(r.lat),
+      lng: Number(r.lng),
+      timestamp: r.timestamp,
+      ts: new Date(r.timestamp).getTime(),
+    }));
+
+    const modes = await loadModes();
+    const segments = classifySegments(allPoints, modes);
+    const walkableIdx = walkablePointIndices(segments);
+
+    // Dedupe by lat,lng to avoid redundant point-in-polygon tests.
+    const seen = new Set<string>();
+    const points: Array<{ lat: number; lng: number }> = [];
+    for (const idx of walkableIdx) {
+      const p = allPoints[idx];
+      const key = `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      points.push({ lat: p.lat, lng: p.lng });
+    }
 
     if (points.length === 0) {
       return Response.json({ visited: [], count: 0, total: 0 });

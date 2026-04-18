@@ -1,11 +1,18 @@
 import { query } from "@/lib/db";
 import { homeExclusionSql } from "@/lib/home";
-import { ensureModesTable, walkableSql } from "@/lib/modes";
+import {
+  classifySegments,
+  loadModes,
+  walkedDistanceMeters,
+  walkablePointIndices,
+  type RawPoint,
+} from "@/lib/walkClassify";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET() {
   try {
-    await ensureModesTable();
-
     const [neighborhoodStats] = await query(`
       SELECT
         COUNT(*) FILTER (WHERE walked_segments_count > 0) as neighborhoods_started,
@@ -14,32 +21,31 @@ export async function GET() {
       FROM neighborhood_stats
     `);
 
-    const homeFilter = homeExclusionSql();
-    const walkable = walkableSql("timestamp");
-
-    const [pointCount] = await query(
-      `SELECT COUNT(*) as total_points FROM gps_points
-       WHERE ${homeFilter} AND ${walkable}`
+    // Pull the same points /api/walks uses so we can classify identically
+    // — auto-detected transit runs (run_type="transit") and manually-
+    // tagged transit (subway/car/bike) are both excluded from distance.
+    const rows = await query(
+      `SELECT lat, lng, timestamp FROM gps_points
+       WHERE ${homeExclusionSql()} ORDER BY timestamp ASC`
     );
+    const points: RawPoint[] = (
+      rows as unknown as Array<{
+        lat: string | number;
+        lng: string | number;
+        timestamp: string;
+      }>
+    ).map((r) => ({
+      lat: Number(r.lat),
+      lng: Number(r.lng),
+      timestamp: r.timestamp,
+      ts: new Date(r.timestamp).getTime(),
+    }));
 
-    // Calculate actual walked distance from GPS points using PostGIS.
-    // Home-area points and transit-tagged points (subway / bike) are
-    // excluded before the window function so the LEAD jumps across
-    // them and they don't count toward walked mileage.
-    const [distance] = await query(`
-      SELECT COALESCE(SUM(seg_distance), 0) as total_meters FROM (
-        SELECT
-          ST_Distance(
-            geom,
-            LEAD(geom) OVER (ORDER BY timestamp)
-          ) as seg_distance
-        FROM gps_points
-        WHERE ${homeFilter} AND ${walkable}
-      ) sub
-      WHERE seg_distance < 100
-    `);
+    const modes = await loadModes();
+    const segments = classifySegments(points, modes);
 
-    const totalMeters = Number(distance.total_meters);
+    const totalMeters = walkedDistanceMeters(segments);
+    const totalPoints = walkablePointIndices(segments).size;
 
     return Response.json({
       total_km: (totalMeters / 1000).toFixed(1),
@@ -47,17 +53,20 @@ export async function GET() {
       neighborhoods_started: Number(neighborhoodStats.neighborhoods_started),
       total_neighborhoods: Number(neighborhoodStats.total_neighborhoods),
       best_coverage_pct: Number(neighborhoodStats.best_coverage).toFixed(1),
-      total_gps_points: Number(pointCount.total_points),
+      total_gps_points: totalPoints,
     });
   } catch (error) {
     console.error("Stats API error:", error);
-    return Response.json({
-      total_km: "0",
-      total_miles: "0",
-      neighborhoods_started: 0,
-      total_neighborhoods: 0,
-      best_coverage_pct: "0",
-      total_gps_points: 0,
-    }, { status: 500 });
+    return Response.json(
+      {
+        total_km: "0",
+        total_miles: "0",
+        neighborhoods_started: 0,
+        total_neighborhoods: 0,
+        best_coverage_pct: "0",
+        total_gps_points: 0,
+      },
+      { status: 500 }
+    );
   }
 }
