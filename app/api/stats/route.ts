@@ -1,8 +1,11 @@
 import { query } from "@/lib/db";
 import { homeExclusionSql } from "@/lib/home";
+import { ensureModesTable, walkableSql } from "@/lib/modes";
 
 export async function GET() {
   try {
+    await ensureModesTable();
+
     const [neighborhoodStats] = await query(`
       SELECT
         COUNT(*) FILTER (WHERE walked_segments_count > 0) as neighborhoods_started,
@@ -12,14 +15,17 @@ export async function GET() {
     `);
 
     const homeFilter = homeExclusionSql();
+    const walkable = walkableSql("timestamp");
 
     const [pointCount] = await query(
-      `SELECT COUNT(*) as total_points FROM gps_points WHERE ${homeFilter}`
+      `SELECT COUNT(*) as total_points FROM gps_points
+       WHERE ${homeFilter} AND ${walkable}`
     );
 
     // Calculate actual walked distance from GPS points using PostGIS.
-    // Home-area points are excluded before the window function so the
-    // LEAD jumps across them and the home scribble doesn't count.
+    // Home-area points and transit-tagged points (subway / bike) are
+    // excluded before the window function so the LEAD jumps across
+    // them and they don't count toward walked mileage.
     const [distance] = await query(`
       SELECT COALESCE(SUM(seg_distance), 0) as total_meters FROM (
         SELECT
@@ -28,7 +34,7 @@ export async function GET() {
             LEAD(geom) OVER (ORDER BY timestamp)
           ) as seg_distance
         FROM gps_points
-        WHERE ${homeFilter}
+        WHERE ${homeFilter} AND ${walkable}
       ) sub
       WHERE seg_distance < 100
     `);

@@ -1,4 +1,5 @@
 import { query } from "@/lib/db";
+import { ensureModesTable, walkableSql } from "@/lib/modes";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -60,8 +61,13 @@ function loadParks(): ParkFeature[] {
 
 export async function GET() {
   try {
-    // Get all GPS points
-    const points = await query("SELECT DISTINCT lat, lng FROM gps_points");
+    await ensureModesTable();
+
+    // Only count points that weren't manually tagged as transit — e.g.
+    // a subway that rolls under a park shouldn't mark it as "visited".
+    const points = await query(
+      `SELECT DISTINCT lat, lng FROM gps_points WHERE ${walkableSql("timestamp")}`
+    );
 
     if (points.length === 0) {
       return Response.json({ visited: [], count: 0, total: 0 });

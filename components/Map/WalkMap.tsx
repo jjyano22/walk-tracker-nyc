@@ -12,6 +12,33 @@ interface WalkMapProps {
 
 type GeoFeature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, unknown>>;
 
+interface WalkSegmentProperties {
+  mode: string | null;
+  speed_mps: number;
+  distance_m: number;
+  duration_s: number;
+  start_time: string;
+  end_time: string;
+}
+
+type WalkSegmentFeature = GeoJSON.Feature<
+  GeoJSON.LineString,
+  WalkSegmentProperties
+>;
+
+interface WalkCollection {
+  type: "FeatureCollection";
+  features: WalkSegmentFeature[];
+}
+
+// Expansion thresholds for one-tap reclassification.
+// If the clicked segment is "fast" (> 1.5 m/s), we grow the range to
+// include contiguous fast segments so a single tap tags the whole
+// subway ride from entry to exit. A slow click (walking) only tags
+// the one segment.
+const FAST_MPS = 1.5;
+const MAX_EXPAND_GAP_SECONDS = 60;
+
 function featureBBox(
   feature: GeoFeature
 ): [[number, number], [number, number]] | null {
@@ -63,6 +90,51 @@ function responsivePadding(): {
     : { top: 60, bottom: 220, left: 40, right: 40 };
 }
 
+// Given the features list (sorted by time) and an index, walk outward
+// while neighboring segments remain "fast" and adjacent in time.
+// Returns the inclusive index range of the expanded run.
+function expandFastRun(
+  features: WalkSegmentFeature[],
+  clickedIdx: number
+): { startIdx: number; endIdx: number } {
+  const clicked = features[clickedIdx];
+  if (!clicked || clicked.properties.speed_mps <= FAST_MPS) {
+    return { startIdx: clickedIdx, endIdx: clickedIdx };
+  }
+
+  const contiguous = (a: WalkSegmentFeature, b: WalkSegmentFeature): boolean => {
+    const gap =
+      (new Date(b.properties.start_time).getTime() -
+        new Date(a.properties.end_time).getTime()) /
+      1000;
+    return Math.abs(gap) <= MAX_EXPAND_GAP_SECONDS;
+  };
+
+  let startIdx = clickedIdx;
+  while (startIdx > 0) {
+    const prev = features[startIdx - 1];
+    const curr = features[startIdx];
+    if (prev.properties.speed_mps > FAST_MPS && contiguous(prev, curr)) {
+      startIdx -= 1;
+    } else {
+      break;
+    }
+  }
+
+  let endIdx = clickedIdx;
+  while (endIdx < features.length - 1) {
+    const curr = features[endIdx];
+    const next = features[endIdx + 1];
+    if (next.properties.speed_mps > FAST_MPS && contiguous(curr, next)) {
+      endIdx += 1;
+    } else {
+      break;
+    }
+  }
+
+  return { startIdx, endIdx };
+}
+
 export default function WalkMap({
   onNeighborhoodClick,
   hoveredNeighborhood,
@@ -72,6 +144,7 @@ export default function WalkMap({
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<mapboxgl.Map | null>(null);
   const featuresByCode = useRef<Record<string, GeoFeature>>({});
+  const walkFeaturesRef = useRef<WalkSegmentFeature[]>([]);
   const onClickRef = useRef(onNeighborhoodClick);
   const initialized = useRef(false);
   const [status, setStatus] = useState("Loading map...");
@@ -87,7 +160,6 @@ export default function WalkMap({
 
     const win = window as unknown as { mapboxgl?: typeof mapboxgl };
 
-    // Poll for mapboxgl from CDN
     const interval = setInterval(async () => {
       if (!win.mapboxgl || !mapRef.current) return;
       clearInterval(interval);
@@ -121,13 +193,12 @@ export default function WalkMap({
           // Load walked paths
           try {
             const walkRes = await fetch("/api/walks");
-            const walkGeo = await walkRes.json();
+            const walkGeo = (await walkRes.json()) as WalkCollection;
+            walkFeaturesRef.current = walkGeo.features ?? [];
             map.addSource("walked-paths", { type: "geojson", data: walkGeo });
 
-            // One segment per feature. When the user has manually
-            // classified the segment (mode == walk|subway|car|bike) the
-            // matching color wins; otherwise the line is painted on a
-            // speed-based gradient (cyan = slow → purple = fast).
+            // Per-segment paint: manual mode overrides win; otherwise
+            // fall back to a speed-based gradient.
             const modeColor: mapboxgl.ExpressionSpecification = [
               "match",
               ["coalesce", ["get", "mode"], ""],
@@ -135,11 +206,8 @@ export default function WalkMap({
               "#00ffd5",
               "subway",
               "#a78bfa",
-              "car",
-              "#fb923c",
               "bike",
               "#f472b6",
-              // default: gradient by speed_mps
               [
                 "interpolate",
                 ["linear"],
@@ -178,8 +246,7 @@ export default function WalkMap({
               },
             });
 
-            // Wider invisible hit layer so tapping a thin line on mobile
-            // is forgiving. Clicks on this layer open the mode popup.
+            // Invisible wider hit layer for forgiving mobile taps.
             map.addLayer({
               id: "walked-paths-hit",
               type: "line",
@@ -191,78 +258,162 @@ export default function WalkMap({
               },
             });
 
+            const openSegmentPopup = (
+              e: mapboxgl.MapLayerMouseEvent,
+              feature: WalkSegmentFeature
+            ) => {
+              const features = walkFeaturesRef.current;
+              const clickedIdx = features.findIndex(
+                (f) =>
+                  f.properties.start_time === feature.properties.start_time &&
+                  f.properties.end_time === feature.properties.end_time
+              );
+              const run =
+                clickedIdx >= 0
+                  ? expandFastRun(features, clickedIdx)
+                  : { startIdx: -1, endIdx: -1 };
+
+              const runCount =
+                run.startIdx >= 0 ? run.endIdx - run.startIdx + 1 : 1;
+              const rangeStart =
+                run.startIdx >= 0
+                  ? features[run.startIdx].properties.start_time
+                  : feature.properties.start_time;
+              const rangeEnd =
+                run.endIdx >= 0
+                  ? features[run.endIdx].properties.end_time
+                  : feature.properties.end_time;
+
+              let totalDist = 0;
+              let totalDur = 0;
+              if (run.startIdx >= 0) {
+                for (let i = run.startIdx; i <= run.endIdx; i++) {
+                  totalDist += features[i].properties.distance_m;
+                  totalDur += features[i].properties.duration_s;
+                }
+              } else {
+                totalDist = feature.properties.distance_m;
+                totalDur = feature.properties.duration_s;
+              }
+              const avgMps = totalDur > 0 ? totalDist / totalDur : 0;
+
+              const currentMode =
+                typeof feature.properties.mode === "string" &&
+                feature.properties.mode
+                  ? feature.properties.mode
+                  : null;
+
+              const headerText =
+                runCount > 1
+                  ? `${runCount} segments · ${(totalDist / 1000).toFixed(2)} km · ${avgMps.toFixed(1)} m/s avg`
+                  : `${avgMps.toFixed(1)} m/s · ${totalDist}m · ${totalDur}s`;
+
+              const popupNode = document.createElement("div");
+              popupNode.className = "walk-mode-popup";
+              popupNode.innerHTML = `
+                <div style="color:#fff;font-size:13px;min-width:200px">
+                  <div style="color:#a1a1aa;font-size:11px;margin-bottom:8px">
+                    ${headerText}
+                    ${currentMode ? `<br/><span style="color:#e5e7eb">Tagged: <strong>${currentMode}</strong></span>` : ""}
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+                    <button data-mode="walk"   style="padding:6px 8px;background:#00ffd520;border:1px solid #00ffd5;color:#00ffd5;border-radius:6px;cursor:pointer">Walk</button>
+                    <button data-mode="subway" style="padding:6px 8px;background:#a78bfa20;border:1px solid #a78bfa;color:#a78bfa;border-radius:6px;cursor:pointer">Subway</button>
+                    <button data-mode="bike"   style="padding:6px 8px;background:#f472b620;border:1px solid #f472b6;color:#f472b6;border-radius:6px;cursor:pointer">Bike</button>
+                  </div>
+                  <button data-mode="auto" style="margin-top:6px;width:100%;padding:6px 8px;background:transparent;border:1px solid #3f3f46;color:#a1a1aa;border-radius:6px;cursor:pointer;font-size:11px">Reset to auto</button>
+                  <button data-action="delete" data-confirm="0" style="margin-top:6px;width:100%;padding:6px 8px;background:transparent;border:1px solid #3f3f46;color:#ef4444;border-radius:6px;cursor:pointer;font-size:11px">Remove segment</button>
+                </div>
+              `;
+
+              const popup = new mb.Popup({ className: "dark-popup" })
+                .setLngLat(e.lngLat)
+                .setDOMContent(popupNode)
+                .addTo(map);
+
+              const refreshSource = async () => {
+                const refreshed = await fetch("/api/walks");
+                const refreshedGeo = (await refreshed.json()) as WalkCollection;
+                walkFeaturesRef.current = refreshedGeo.features ?? [];
+                const src = map.getSource(
+                  "walked-paths"
+                ) as mapboxgl.GeoJSONSource | undefined;
+                if (src) src.setData(refreshedGeo);
+              };
+
+              popupNode.addEventListener("click", async (ev) => {
+                const target = ev.target as HTMLElement;
+                const btn = target.closest(
+                  "button[data-mode], button[data-action]"
+                ) as HTMLButtonElement | null;
+                if (!btn) return;
+
+                const action = btn.dataset.action;
+                const mode = btn.dataset.mode;
+
+                if (action === "delete") {
+                  // Two-step confirm: first tap arms it, second tap fires.
+                  if (btn.dataset.confirm !== "1") {
+                    btn.dataset.confirm = "1";
+                    btn.style.background = "#ef444420";
+                    btn.style.borderColor = "#ef4444";
+                    btn.textContent = "Tap again to confirm";
+                    return;
+                  }
+                  btn.disabled = true;
+                  btn.style.opacity = "0.5";
+                  try {
+                    const res = await fetch("/api/walks/delete", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        start_ts: rangeStart,
+                        end_ts: rangeEnd,
+                      }),
+                    });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    popup.remove();
+                    await refreshSource();
+                  } catch (err) {
+                    console.error("delete failed:", err);
+                    btn.style.border = "1px solid #ef4444";
+                    btn.textContent = "Failed";
+                  }
+                  return;
+                }
+
+                if (mode) {
+                  btn.disabled = true;
+                  btn.style.opacity = "0.5";
+                  try {
+                    const res = await fetch("/api/walks/mode", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        start_ts: rangeStart,
+                        end_ts: rangeEnd,
+                        mode,
+                      }),
+                    });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    popup.remove();
+                    await refreshSource();
+                  } catch (err) {
+                    console.error("mode update failed:", err);
+                    btn.style.border = "1px solid #ef4444";
+                    btn.textContent = "Failed";
+                  }
+                }
+              });
+            };
+
             map.on(
               "click",
               "walked-paths-hit",
               (e: mapboxgl.MapLayerMouseEvent) => {
                 const feature = e.features?.[0];
                 if (!feature) return;
-                const p = (feature.properties ?? {}) as Record<string, unknown>;
-                const currentMode =
-                  typeof p.mode === "string" && p.mode ? p.mode : null;
-                const speed = Number(p.speed_mps) || 0;
-                const dist = Number(p.distance_m) || 0;
-                const dur = Number(p.duration_s) || 0;
-                const startTs = String(p.start_time ?? "");
-                const endTs = String(p.end_time ?? "");
-
-                const popupNode = document.createElement("div");
-                popupNode.className = "walk-mode-popup";
-                popupNode.innerHTML = `
-                  <div style="color:#fff;font-size:13px;min-width:180px">
-                    <div style="color:#a1a1aa;font-size:11px;margin-bottom:8px">
-                      ${speed.toFixed(1)} m/s · ${dist}m · ${dur}s
-                      ${currentMode ? `<br/><span style="color:#e5e7eb">Tagged: <strong>${currentMode}</strong></span>` : ""}
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-                      <button data-mode="walk"   style="padding:6px 8px;background:#00ffd520;border:1px solid #00ffd5;color:#00ffd5;border-radius:6px;cursor:pointer">Walk</button>
-                      <button data-mode="subway" style="padding:6px 8px;background:#a78bfa20;border:1px solid #a78bfa;color:#a78bfa;border-radius:6px;cursor:pointer">Subway</button>
-                      <button data-mode="car"    style="padding:6px 8px;background:#fb923c20;border:1px solid #fb923c;color:#fb923c;border-radius:6px;cursor:pointer">Car</button>
-                      <button data-mode="bike"   style="padding:6px 8px;background:#f472b620;border:1px solid #f472b6;color:#f472b6;border-radius:6px;cursor:pointer">Bike</button>
-                    </div>
-                    <button data-mode="auto" style="margin-top:6px;width:100%;padding:6px 8px;background:transparent;border:1px solid #3f3f46;color:#a1a1aa;border-radius:6px;cursor:pointer;font-size:11px">Reset to auto</button>
-                  </div>
-                `;
-
-                const popup = new mb.Popup({ className: "dark-popup" })
-                  .setLngLat(e.lngLat)
-                  .setDOMContent(popupNode)
-                  .addTo(map);
-
-                popupNode.addEventListener("click", async (ev) => {
-                  const target = ev.target as HTMLElement;
-                  const btn = target.closest("button[data-mode]");
-                  if (!btn) return;
-                  const mode = btn.getAttribute("data-mode");
-                  if (!mode || !startTs || !endTs) return;
-                  btn.setAttribute("disabled", "true");
-                  (btn as HTMLButtonElement).style.opacity = "0.5";
-                  try {
-                    const res = await fetch("/api/walks/mode", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        start_ts: startTs,
-                        end_ts: endTs,
-                        mode,
-                      }),
-                    });
-                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                    popup.remove();
-                    // Refresh the source so the new color shows.
-                    const refreshed = await fetch("/api/walks");
-                    const refreshedGeo = await refreshed.json();
-                    const src = map.getSource(
-                      "walked-paths"
-                    ) as mapboxgl.GeoJSONSource | undefined;
-                    if (src) src.setData(refreshedGeo);
-                  } catch (err) {
-                    console.error("mode update failed:", err);
-                    (btn as HTMLButtonElement).style.border =
-                      "1px solid #ef4444";
-                    btn.textContent = "Failed";
-                  }
-                });
+                openSegmentPopup(e, feature as unknown as WalkSegmentFeature);
               }
             );
 
@@ -338,7 +489,7 @@ export default function WalkMap({
               "walked-paths-layer"
             );
 
-            // Hover highlight (from sidebar list)
+            // Hover highlight (from sidebar list hover) — subtle.
             map.addLayer(
               {
                 id: "neighborhoods-highlight",
@@ -353,17 +504,21 @@ export default function WalkMap({
               "walked-paths-layer"
             );
 
-            // Selected outline (sticky highlight)
-            map.addLayer({
-              id: "neighborhoods-selected-outline",
-              type: "line",
-              source: "neighborhoods",
-              paint: {
-                "line-color": "#00ffd5",
-                "line-width": 2.5,
+            // Selected highlight — brighter light-white fill over the
+            // whole neighborhood (replaces the previous cyan border).
+            map.addLayer(
+              {
+                id: "neighborhoods-selected-fill",
+                type: "fill",
+                source: "neighborhoods",
+                paint: {
+                  "fill-color": "rgba(255,255,255,0.25)",
+                  "fill-opacity": 1,
+                },
+                filter: ["==", "NTA2020", ""],
               },
-              filter: ["==", "NTA2020", ""],
-            });
+              "walked-paths-layer"
+            );
 
             map.on(
               "click",
@@ -423,7 +578,7 @@ export default function WalkMap({
     const map = mapInstance.current;
     if (!map || !layersReady) return;
 
-    map.setFilter("neighborhoods-selected-outline", [
+    map.setFilter("neighborhoods-selected-fill", [
       "==",
       "NTA2020",
       selectedNeighborhood ?? "",
@@ -476,7 +631,6 @@ export default function WalkMap({
         maxZoom: 13,
       }
     );
-    // boroughCodesKey provides a stable identity for the codes array
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boroughCodesKey, layersReady]);
 

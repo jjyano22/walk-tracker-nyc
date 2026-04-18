@@ -1,36 +1,19 @@
 import { query } from "@/lib/db";
+import { ensureModesTable } from "@/lib/modes";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const ALLOWED_MODES = ["walk", "subway", "car", "bike", "auto"] as const;
+const ALLOWED_MODES = ["walk", "subway", "bike", "auto"] as const;
 type Mode = (typeof ALLOWED_MODES)[number];
 
 function isMode(v: unknown): v is Mode {
   return typeof v === "string" && (ALLOWED_MODES as readonly string[]).includes(v);
 }
 
-async function ensureTable() {
-  await query(`
-    CREATE TABLE IF NOT EXISTS gps_modes (
-      id BIGSERIAL PRIMARY KEY,
-      start_ts TIMESTAMPTZ NOT NULL,
-      end_ts TIMESTAMPTZ NOT NULL,
-      mode TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-  await query(
-    `CREATE INDEX IF NOT EXISTS idx_gps_modes_range ON gps_modes (start_ts, end_ts)`
-  );
-  await query(
-    `CREATE INDEX IF NOT EXISTS idx_gps_modes_created_at ON gps_modes (created_at DESC)`
-  );
-}
-
 export async function POST(request: Request) {
   try {
-    await ensureTable();
+    await ensureModesTable();
 
     const body = (await request.json()) as {
       start_ts?: string;

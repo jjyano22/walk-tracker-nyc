@@ -1,15 +1,23 @@
 import { query } from "@/lib/db";
 import { homeExclusionSql } from "@/lib/home";
+import { ensureModesTable, walkableSql } from "@/lib/modes";
 
 export async function POST() {
   // No auth — personal app
 
   try {
-    // Step 1: Fetch unprocessed GPS points (excluding home area)
+    await ensureModesTable();
+
+    // Step 1: Fetch unprocessed GPS points (excluding home area and
+    // points manually tagged as transit). Transit-tagged points are
+    // left with is_processed = FALSE so that if the user later
+    // resets them to auto/walk, they flow through the pipeline.
     const points = await query(`
       SELECT id, lat, lng, timestamp
       FROM gps_points
-      WHERE is_processed = FALSE AND ${homeExclusionSql()}
+      WHERE is_processed = FALSE
+        AND ${homeExclusionSql()}
+        AND ${walkableSql("timestamp")}
       ORDER BY timestamp ASC
       LIMIT 5000
     `);
