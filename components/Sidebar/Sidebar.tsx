@@ -217,42 +217,40 @@ export default function Sidebar({
       {/* Mobile: bottom sheet */}
       <div
         className={`md:hidden fixed left-0 right-0 bottom-0 z-10 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 rounded-t-xl shadow-2xl transition-[max-height] duration-300 ease-out flex flex-col ${
-          mobileExpanded ? "max-h-[85vh]" : "max-h-[120px]"
+          mobileExpanded ? "max-h-[85vh]" : "max-h-[60px]"
         }`}
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         <button
           type="button"
           onClick={() => setMobileExpanded((v) => !v)}
-          className="flex flex-col items-center justify-start pt-2 pb-1 shrink-0"
+          className="flex items-center gap-3 px-4 py-2 shrink-0 w-full"
           aria-label={mobileExpanded ? "Collapse sheet" : "Expand sheet"}
           aria-expanded={mobileExpanded}
         >
-          <div className="w-10 h-1 rounded-full bg-zinc-700" />
-          <div className="mt-2 flex items-center gap-3 px-4 w-full justify-between">
-            <div className="text-sm font-semibold text-white">
-              Walk Tracker NYC
-            </div>
-            <div className="flex items-center gap-3 text-xs text-zinc-400">
-              {stats && (
-                <>
-                  <span>
-                    <span className="text-white font-semibold">
-                      {stats.total_miles}
-                    </span>{" "}
-                    mi
+          <div className="flex items-center gap-2 text-xs text-zinc-400 flex-1 justify-start">
+            {stats && (
+              <>
+                <span>
+                  <span className="text-white font-semibold">
+                    {stats.total_miles}
+                  </span>{" "}
+                  mi
+                </span>
+                <span className="text-zinc-600">·</span>
+                <span>
+                  <span className="text-white font-semibold">
+                    {stats.neighborhoods_started}
                   </span>
-                  <span>
-                    <span className="text-white font-semibold">
-                      {stats.neighborhoods_started}
-                    </span>
-                    /{stats.total_neighborhoods} nbhds
-                  </span>
-                </>
-              )}
-              <span className="text-zinc-500">{mobileExpanded ? "v" : "^"}</span>
-            </div>
+                  /{stats.total_neighborhoods}
+                </span>
+              </>
+            )}
           </div>
+          <div className="w-10 h-1 rounded-full bg-zinc-700" />
+          <span className="text-zinc-500 text-xs flex-1 text-right">
+            {mobileExpanded ? "v" : "^"}
+          </span>
         </button>
 
         {mobileExpanded && (

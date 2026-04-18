@@ -76,6 +76,7 @@ export default function WalkMap({
 }: WalkMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<mapboxgl.Map | null>(null);
+  const activePopup = useRef<mapboxgl.Popup | null>(null);
   const featuresByCode = useRef<Record<string, GeoFeature>>({});
   const onClickRef = useRef(onNeighborhoodClick);
   const initialized = useRef(false);
@@ -108,7 +109,6 @@ export default function WalkMap({
           center: [-73.935242, 40.73061],
           zoom: 12,
         });
-        map.addControl(new mb.NavigationControl(), "top-right");
         mapInstance.current = map;
 
         map.on("error", (e: mapboxgl.ErrorEvent) => {
@@ -187,10 +187,12 @@ export default function WalkMap({
                   </div>
                 `;
 
+                activePopup.current?.remove();
                 const popup = new mb.Popup({ className: "dark-popup" })
                   .setLngLat(e.lngLat)
                   .setDOMContent(popupNode)
                   .addTo(map);
+                activePopup.current = popup;
 
                 popupNode.addEventListener("click", async (ev) => {
                   const btn = (ev.target as HTMLElement).closest(
@@ -310,7 +312,8 @@ export default function WalkMap({
               const code = (p.NTA2020 as string) || (p.nta2020 as string);
               const name = (p.NTAName as string) || (p.ntaname as string) || code;
               onClickRef.current?.(code, name);
-              new mb.Popup({ className: "dark-popup" })
+              activePopup.current?.remove();
+              const popup = new mb.Popup({ className: "dark-popup" })
                 .setLngLat(e.lngLat)
                 .setHTML(
                   `<div style="color:#fff;font-size:14px"><strong>${name}</strong><br/>Coverage: ${(
@@ -318,6 +321,7 @@ export default function WalkMap({
                   ).toFixed(1)}%</div>`
                 )
                 .addTo(map);
+              activePopup.current = popup;
             });
             map.on("mouseenter", "neighborhoods-fill", () => {
               map.getCanvas().style.cursor = "pointer";
