@@ -38,7 +38,7 @@ export function transitOverrideSql(tsCol: string = "timestamp"): string {
   return `EXISTS (
     SELECT 1 FROM gps_modes m
     WHERE ${tsCol} >= m.start_ts AND ${tsCol} <= m.end_ts
-      AND m.mode IN ('subway', 'bike')
+      AND m.mode IN ('subway', 'car', 'bike')
       AND NOT EXISTS (
         SELECT 1 FROM gps_modes m2
         WHERE ${tsCol} >= m2.start_ts AND ${tsCol} <= m2.end_ts

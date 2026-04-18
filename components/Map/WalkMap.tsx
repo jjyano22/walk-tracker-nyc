@@ -14,6 +14,8 @@ type GeoFeature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, unknown>>;
 
 interface WalkSegmentProperties {
   mode: string | null;
+  run_type: "walk" | "transit";
+  run_total_m: number;
   speed_mps: number;
   distance_m: number;
   duration_s: number;
@@ -31,12 +33,14 @@ interface WalkCollection {
   features: WalkSegmentFeature[];
 }
 
-// Expansion thresholds for one-tap reclassification.
-// If the clicked segment is "fast" (> 1.5 m/s), we grow the range to
-// include contiguous fast segments so a single tap tags the whole
-// subway ride from entry to exit. A slow click (walking) only tags
-// the one segment.
-const FAST_MPS = 1.5;
+// Expansion rules for one-tap reclassification.
+//
+//  * If the clicked segment already has a manual mode, expand to the
+//    contiguous run of segments carrying the SAME manual mode. Lets
+//    you undo a mis-tag with a single tap.
+//  * Else if the clicked segment is part of a server-labeled transit
+//    run (run_type === "transit"), expand through the entire run.
+//  * Else single-segment only (walking clicks don't auto-expand).
 const MAX_EXPAND_GAP_SECONDS = 60;
 
 function featureBBox(
@@ -93,57 +97,70 @@ function responsivePadding(): {
 // Given the features list (sorted by time) and an index, walk outward
 // while neighboring segments remain "fast" and adjacent in time.
 // Returns the inclusive index range of the expanded run.
-// A segment counts as "genuinely fast" (not GPS jitter) if it's both
-// above walking pace AND covers enough ground to be real movement.
-const MIN_EXPAND_DIST_M = 30;
-
-function isFast(f: WalkSegmentFeature): boolean {
-  return (
-    f.properties.speed_mps > FAST_MPS &&
-    f.properties.distance_m >= MIN_EXPAND_DIST_M
-  );
+function contiguous(a: WalkSegmentFeature, b: WalkSegmentFeature): boolean {
+  const gap =
+    (new Date(b.properties.start_time).getTime() -
+      new Date(a.properties.end_time).getTime()) /
+    1000;
+  return Math.abs(gap) <= MAX_EXPAND_GAP_SECONDS;
 }
 
-function expandFastRun(
+function expandClick(
   features: WalkSegmentFeature[],
   clickedIdx: number
 ): { startIdx: number; endIdx: number } {
   const clicked = features[clickedIdx];
-  if (!clicked || !isFast(clicked)) {
-    return { startIdx: clickedIdx, endIdx: clickedIdx };
-  }
+  if (!clicked) return { startIdx: clickedIdx, endIdx: clickedIdx };
 
-  const contiguous = (a: WalkSegmentFeature, b: WalkSegmentFeature): boolean => {
-    const gap =
-      (new Date(b.properties.start_time).getTime() -
-        new Date(a.properties.end_time).getTime()) /
-      1000;
-    return Math.abs(gap) <= MAX_EXPAND_GAP_SECONDS;
-  };
-
-  let startIdx = clickedIdx;
-  while (startIdx > 0) {
-    const prev = features[startIdx - 1];
-    const curr = features[startIdx];
-    if (isFast(prev) && contiguous(prev, curr)) {
-      startIdx -= 1;
-    } else {
-      break;
+  // Case 1: segment has a manual mode tag → expand to contiguous run
+  // with the same tag. This lets the user untag a mistakenly-tagged
+  // stretch with one tap.
+  if (clicked.properties.mode) {
+    const mode = clicked.properties.mode;
+    let start = clickedIdx;
+    while (start > 0) {
+      const prev = features[start - 1];
+      const curr = features[start];
+      if (prev.properties.mode === mode && contiguous(prev, curr)) {
+        start -= 1;
+      } else break;
     }
-  }
-
-  let endIdx = clickedIdx;
-  while (endIdx < features.length - 1) {
-    const curr = features[endIdx];
-    const next = features[endIdx + 1];
-    if (isFast(next) && contiguous(curr, next)) {
-      endIdx += 1;
-    } else {
-      break;
+    let end = clickedIdx;
+    while (end < features.length - 1) {
+      const curr = features[end];
+      const next = features[end + 1];
+      if (next.properties.mode === mode && contiguous(curr, next)) {
+        end += 1;
+      } else break;
     }
+    return { startIdx: start, endIdx: end };
   }
 
-  return { startIdx, endIdx };
+  // Case 2: part of a server-labeled transit run → expand through
+  // the entire run. Server already enforced the min-total-distance
+  // threshold, so this is just finding the run's extent.
+  if (clicked.properties.run_type === "transit") {
+    let start = clickedIdx;
+    while (start > 0) {
+      const prev = features[start - 1];
+      const curr = features[start];
+      if (prev.properties.run_type === "transit" && contiguous(prev, curr)) {
+        start -= 1;
+      } else break;
+    }
+    let end = clickedIdx;
+    while (end < features.length - 1) {
+      const curr = features[end];
+      const next = features[end + 1];
+      if (next.properties.run_type === "transit" && contiguous(curr, next)) {
+        end += 1;
+      } else break;
+    }
+    return { startIdx: start, endIdx: end };
+  }
+
+  // Case 3: plain walking segment → don't expand.
+  return { startIdx: clickedIdx, endIdx: clickedIdx };
 }
 
 export default function WalkMap({
@@ -208,28 +225,32 @@ export default function WalkMap({
             walkFeaturesRef.current = walkGeo.features ?? [];
             map.addSource("walked-paths", { type: "geojson", data: walkGeo });
 
-            // Per-segment paint: manual mode overrides win; GPS jitter
-            // (< 30m segments) forced to walk color; everything else
-            // falls back to a speed-based gradient.
+            // Per-segment paint. Priority:
+            //   1. Manual mode tags (walk/subway/car/bike)
+            //   2. run_type from the server:
+            //      - "walk" runs: cyan (includes short fast bursts
+            //        that didn't cross the 500m threshold and GPS
+            //        jitter)
+            //      - "transit" runs: gradient by segment speed
+            //        (light blue → purple)
             const modeColor: mapboxgl.ExpressionSpecification = [
               "case",
               ["==", ["coalesce", ["get", "mode"], ""], "walk"],
               "#00ffd5",
               ["==", ["coalesce", ["get", "mode"], ""], "subway"],
               "#a78bfa",
+              ["==", ["coalesce", ["get", "mode"], ""], "car"],
+              "#fb923c",
               ["==", ["coalesce", ["get", "mode"], ""], "bike"],
               "#f472b6",
-              // Short segments = GPS jitter, always cyan
-              ["<", ["get", "distance_m"], 30],
+              ["==", ["get", "run_type"], "walk"],
               "#00ffd5",
-              // Real movement: gradient by speed
+              // Transit runs: gradient by segment speed
               [
                 "interpolate",
                 ["linear"],
                 ["get", "speed_mps"],
                 0,
-                "#00ffd5",
-                1.5,
                 "#00ffd5",
                 2.5,
                 "#7dd3fc",
@@ -285,7 +306,7 @@ export default function WalkMap({
               );
               const run =
                 clickedIdx >= 0
-                  ? expandFastRun(features, clickedIdx)
+                  ? expandClick(features, clickedIdx)
                   : { startIdx: -1, endIdx: -1 };
 
               const runCount =
@@ -331,9 +352,10 @@ export default function WalkMap({
                     ${headerText}
                     ${currentMode ? `<br/><span style="color:#e5e7eb">Tagged: <strong>${currentMode}</strong></span>` : ""}
                   </div>
-                  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
                     <button data-mode="walk"   style="padding:6px 8px;background:#00ffd520;border:1px solid #00ffd5;color:#00ffd5;border-radius:6px;cursor:pointer">Walk</button>
                     <button data-mode="subway" style="padding:6px 8px;background:#a78bfa20;border:1px solid #a78bfa;color:#a78bfa;border-radius:6px;cursor:pointer">Subway</button>
+                    <button data-mode="car"    style="padding:6px 8px;background:#fb923c20;border:1px solid #fb923c;color:#fb923c;border-radius:6px;cursor:pointer">Car</button>
                     <button data-mode="bike"   style="padding:6px 8px;background:#f472b620;border:1px solid #f472b6;color:#f472b6;border-radius:6px;cursor:pointer">Bike</button>
                   </div>
                   <button data-mode="auto" style="margin-top:6px;width:100%;padding:6px 8px;background:transparent;border:1px solid #3f3f46;color:#a1a1aa;border-radius:6px;cursor:pointer;font-size:11px">Reset to auto</button>
@@ -519,22 +541,6 @@ export default function WalkMap({
               "walked-paths-layer"
             );
 
-            // Selected highlight — brighter light-white fill over the
-            // whole neighborhood (replaces the previous cyan border).
-            map.addLayer(
-              {
-                id: "neighborhoods-selected-fill",
-                type: "fill",
-                source: "neighborhoods",
-                paint: {
-                  "fill-color": "rgba(255,255,255,0.25)",
-                  "fill-opacity": 1,
-                },
-                filter: ["==", "NTA2020", ""],
-              },
-              "walked-paths-layer"
-            );
-
             map.on(
               "click",
               "neighborhoods-fill",
@@ -588,17 +594,11 @@ export default function WalkMap({
     ]);
   }, [hoveredNeighborhood, layersReady]);
 
-  // Highlight + fly to selected neighborhood
+  // Fly to selected neighborhood (no color highlight — just move the
+  // camera so the popup + sidebar stats feel connected).
   useEffect(() => {
     const map = mapInstance.current;
     if (!map || !layersReady) return;
-
-    map.setFilter("neighborhoods-selected-fill", [
-      "==",
-      "NTA2020",
-      selectedNeighborhood ?? "",
-    ]);
-
     if (!selectedNeighborhood) return;
     const feature = featuresByCode.current[selectedNeighborhood];
     if (!feature) return;

@@ -8,11 +8,22 @@ export const revalidate = 0;
 // Gap between consecutive GPS fixes at which we stop drawing a line.
 const SESSION_GAP_SECONDS = 5 * 60;
 
+// A segment qualifies as "fast" for run-detection purposes when it's
+// above walking pace AND long enough to not be GPS jitter.
+const RUN_FAST_MPS = 2;
+const RUN_MIN_SEG_METERS = 30;
+const RUN_CONTIGUOUS_GAP_SECONDS = 60;
+
+// Minimum total distance for a run of fast segments to count as real
+// transit (subway, car, bike). Short bursts stay cyan because a real
+// subway or car ride covers several blocks at minimum.
+const TRANSIT_RUN_MIN_METERS = 500;
+
 interface Point {
   lat: number;
   lng: number;
   timestamp: string;
-  ts: number; // epoch ms cache
+  ts: number;
 }
 
 interface ModeRange {
@@ -21,11 +32,15 @@ interface ModeRange {
   mode: string;
 }
 
+type RunType = "walk" | "transit";
+
 interface SegmentFeature {
   type: "Feature";
   geometry: { type: "LineString"; coordinates: number[][] };
   properties: {
-    mode: string | null; // "walk" | "subway" | "car" | "bike" | null
+    mode: string | null;
+    run_type: RunType;
+    run_total_m: number;
     speed_mps: number;
     distance_m: number;
     duration_s: number;
@@ -58,14 +73,10 @@ async function loadModes(): Promise<ModeRange[]> {
       mode: r.mode,
     }));
   } catch {
-    // Table doesn't exist yet — nothing is overridden.
     return [];
   }
 }
 
-// Resolve a timestamp against the override list. Newest (lower index
-// given our ORDER BY created_at DESC) wins. Returns null if no
-// override covers the timestamp, or if the covering override is "auto".
 function resolveMode(ts: number, modes: ModeRange[]): string | null {
   for (const m of modes) {
     if (ts >= m.start && ts <= m.end) {
@@ -104,12 +115,9 @@ export async function GET(request: Request) {
       ts: new Date(r.timestamp).getTime(),
     }));
 
-    // One feature per consecutive-point pair. Each feature carries
-    // speed_mps for auto-coloring and a manual mode (when set) that
-    // overrides the gradient.
+    // First pass: build one feature per consecutive-point pair.
     const features: SegmentFeature[] = [];
     let maxSpeed = 0;
-    let manualCount = 0;
 
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i];
@@ -124,10 +132,8 @@ export async function GET(request: Request) {
       const speedMps = distM / dtSec;
       if (speedMps > maxSpeed) maxSpeed = speedMps;
 
-      // A segment's mode comes from its midpoint's resolved override.
       const midTs = (a.ts + b.ts) / 2;
       const mode = resolveMode(midTs, modes);
-      if (mode) manualCount += 1;
 
       features.push({
         type: "Feature",
@@ -140,6 +146,9 @@ export async function GET(request: Request) {
         },
         properties: {
           mode,
+          // Filled in during second pass:
+          run_type: "walk",
+          run_total_m: 0,
           speed_mps: Number(speedMps.toFixed(2)),
           distance_m: Math.round(distM),
           duration_s: Math.round(dtSec),
@@ -149,12 +158,66 @@ export async function GET(request: Request) {
       });
     }
 
+    // Second pass: detect runs of contiguous fast segments, measure
+    // each run's total distance, and label every feature in the run
+    // with run_type and run_total_m. Short fast bursts end up labeled
+    // "walk" so GPS noise / brief speed spikes don't render as purple.
+    let transitRunCount = 0;
+    let i = 0;
+    while (i < features.length) {
+      const f = features[i];
+      const isFast =
+        f.properties.speed_mps > RUN_FAST_MPS &&
+        f.properties.distance_m >= RUN_MIN_SEG_METERS;
+      if (!isFast) {
+        f.properties.run_type = "walk";
+        f.properties.run_total_m = f.properties.distance_m;
+        i += 1;
+        continue;
+      }
+
+      // Find the end of this fast run.
+      let runEnd = i;
+      let runTotal = f.properties.distance_m;
+      while (runEnd + 1 < features.length) {
+        const curr = features[runEnd];
+        const next = features[runEnd + 1];
+        const gap =
+          (new Date(next.properties.start_time).getTime() -
+            new Date(curr.properties.end_time).getTime()) /
+          1000;
+        const nextFast =
+          next.properties.speed_mps > RUN_FAST_MPS &&
+          next.properties.distance_m >= RUN_MIN_SEG_METERS;
+        if (nextFast && gap <= RUN_CONTIGUOUS_GAP_SECONDS) {
+          runEnd += 1;
+          runTotal += next.properties.distance_m;
+        } else {
+          break;
+        }
+      }
+
+      const runType: RunType =
+        runTotal >= TRANSIT_RUN_MIN_METERS ? "transit" : "walk";
+      if (runType === "transit") transitRunCount += 1;
+      for (let j = i; j <= runEnd; j++) {
+        features[j].properties.run_type = runType;
+        features[j].properties.run_total_m = Math.round(runTotal);
+      }
+      i = runEnd + 1;
+    }
+
+    const manualCount = features.filter(
+      (f) => f.properties.mode !== null
+    ).length;
+
     const summary = {
       total_segments: features.length,
       total_points: points.length,
       max_speed_mps: Number(maxSpeed.toFixed(2)),
       manual_segments: manualCount,
       mode_overrides: modes.length,
+      transit_runs: transitRunCount,
     };
     console.log("[walks] summary", summary);
 

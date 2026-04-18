@@ -4,7 +4,7 @@ import { ensureModesTable } from "@/lib/modes";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const ALLOWED_MODES = ["walk", "subway", "bike", "auto"] as const;
+const ALLOWED_MODES = ["walk", "subway", "car", "bike", "auto"] as const;
 type Mode = (typeof ALLOWED_MODES)[number];
 
 function isMode(v: unknown): v is Mode {
