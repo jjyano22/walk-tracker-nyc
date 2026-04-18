@@ -93,12 +93,23 @@ function responsivePadding(): {
 // Given the features list (sorted by time) and an index, walk outward
 // while neighboring segments remain "fast" and adjacent in time.
 // Returns the inclusive index range of the expanded run.
+// A segment counts as "genuinely fast" (not GPS jitter) if it's both
+// above walking pace AND covers enough ground to be real movement.
+const MIN_EXPAND_DIST_M = 30;
+
+function isFast(f: WalkSegmentFeature): boolean {
+  return (
+    f.properties.speed_mps > FAST_MPS &&
+    f.properties.distance_m >= MIN_EXPAND_DIST_M
+  );
+}
+
 function expandFastRun(
   features: WalkSegmentFeature[],
   clickedIdx: number
 ): { startIdx: number; endIdx: number } {
   const clicked = features[clickedIdx];
-  if (!clicked || clicked.properties.speed_mps <= FAST_MPS) {
+  if (!clicked || !isFast(clicked)) {
     return { startIdx: clickedIdx, endIdx: clickedIdx };
   }
 
@@ -114,7 +125,7 @@ function expandFastRun(
   while (startIdx > 0) {
     const prev = features[startIdx - 1];
     const curr = features[startIdx];
-    if (prev.properties.speed_mps > FAST_MPS && contiguous(prev, curr)) {
+    if (isFast(prev) && contiguous(prev, curr)) {
       startIdx -= 1;
     } else {
       break;
@@ -125,7 +136,7 @@ function expandFastRun(
   while (endIdx < features.length - 1) {
     const curr = features[endIdx];
     const next = features[endIdx + 1];
-    if (next.properties.speed_mps > FAST_MPS && contiguous(curr, next)) {
+    if (isFast(next) && contiguous(curr, next)) {
       endIdx += 1;
     } else {
       break;
@@ -197,17 +208,21 @@ export default function WalkMap({
             walkFeaturesRef.current = walkGeo.features ?? [];
             map.addSource("walked-paths", { type: "geojson", data: walkGeo });
 
-            // Per-segment paint: manual mode overrides win; otherwise
-            // fall back to a speed-based gradient.
+            // Per-segment paint: manual mode overrides win; GPS jitter
+            // (< 30m segments) forced to walk color; everything else
+            // falls back to a speed-based gradient.
             const modeColor: mapboxgl.ExpressionSpecification = [
-              "match",
-              ["coalesce", ["get", "mode"], ""],
-              "walk",
+              "case",
+              ["==", ["coalesce", ["get", "mode"], ""], "walk"],
               "#00ffd5",
-              "subway",
+              ["==", ["coalesce", ["get", "mode"], ""], "subway"],
               "#a78bfa",
-              "bike",
+              ["==", ["coalesce", ["get", "mode"], ""], "bike"],
               "#f472b6",
+              // Short segments = GPS jitter, always cyan
+              ["<", ["get", "distance_m"], 30],
+              "#00ffd5",
+              // Real movement: gradient by speed
               [
                 "interpolate",
                 ["linear"],
