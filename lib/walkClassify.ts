@@ -25,6 +25,12 @@ const SEG_WALK_MAX_METERS = 100;
 const SEG_TRANSIT_MIN_METERS = 500;
 const SEG_FAST_MPS = 2.5;
 
+// Stationary detection: if the user hasn't moved more than this
+// distance within a time window, they're sitting still and the GPS
+// segments are pure drift. Excluded from both rendering and distance.
+const STATIONARY_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+const STATIONARY_RADIUS_M = 50;
+
 // Run-based upgrade: if a segment is adjacent to a transit segment
 // (same session, small gap) and itself is above walking pace, promote
 // it to transit too. Catches GPS samples that fall during a subway
@@ -46,7 +52,7 @@ export interface ModeRange {
   mode: string;
 }
 
-export type RunType = "walk" | "transit";
+export type RunType = "walk" | "transit" | "stationary";
 
 export interface Segment {
   aIdx: number;
@@ -142,8 +148,55 @@ export function classifySegments(
     });
   }
 
-  // Pass 1: per-segment classification.
+  // Pass 0: stationary detection. For each point, check whether the
+  // user has moved more than STATIONARY_RADIUS_M from where they were
+  // STATIONARY_WINDOW_MS ago. If not, the phone is drifting while
+  // stationary (office, restaurant, gym). Mark both-endpoints-stationary
+  // segments so they're excluded from distance and rendering.
+  const pointStationary = new Uint8Array(points.length); // 0=moving, 1=stationary
+  if (points.length > 0) {
+    let windowStart = 0;
+    for (let i = 0; i < points.length; i++) {
+      const threshold = points[i].ts - STATIONARY_WINDOW_MS;
+      while (windowStart < i && points[windowStart].ts < threshold) {
+        windowStart += 1;
+      }
+      // Check if ALL points in [windowStart, i] are within radius.
+      // For efficiency, only check first and last (covers most cases).
+      // Also check the max-distance point in the window for robustness.
+      let maxDist = 0;
+      const ref = points[i];
+      for (
+        let j = windowStart;
+        j < i;
+        // sample: check every 5th point in the window to save cycles
+        j += Math.max(1, Math.floor((i - windowStart) / 10))
+      ) {
+        const d = haversineMeters(points[j], ref);
+        if (d > maxDist) maxDist = d;
+      }
+      // Also always check the first point of the window
+      if (windowStart < i) {
+        const d = haversineMeters(points[windowStart], ref);
+        if (d > maxDist) maxDist = d;
+      }
+      if (maxDist < STATIONARY_RADIUS_M && i - windowStart >= 3) {
+        pointStationary[i] = 1;
+      }
+    }
+  }
+
   for (const s of segments) {
+    if (pointStationary[s.aIdx] && pointStationary[s.bIdx]) {
+      s.runType = "stationary";
+      s.runTotalM = 0;
+      continue;
+    }
+  }
+
+  // Pass 1: per-segment classification (skipping already-stationary).
+  for (const s of segments) {
+    if (s.runType === "stationary") continue;
     s.runType = classifySingleSegment(s);
     s.runTotalM = s.distanceM;
   }
@@ -201,6 +254,7 @@ function gapSeconds(a: Segment, b: Segment): number {
  *   * Otherwise → count
  */
 export function isWalkable(s: Segment): boolean {
+  if (s.runType === "stationary") return false;
   if (s.manualMode === "walk") return true;
   if (s.manualMode && s.manualMode !== "auto") return false;
   return s.runType === "walk";
