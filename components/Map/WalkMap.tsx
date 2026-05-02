@@ -111,14 +111,17 @@ export default function WalkMap({
         });
         mapInstance.current = map;
 
-        map.addControl(
-          new mb.GeolocateControl({
-            positionOptions: { enableHighAccuracy: true },
-            trackUserLocation: true,
-            showUserHeading: true,
-          }),
-          "top-right"
-        );
+        const geolocate = new mb.GeolocateControl({
+          positionOptions: { enableHighAccuracy: true },
+          trackUserLocation: true,
+          showUserHeading: true,
+        });
+        map.addControl(geolocate, "top-right");
+
+        // Auto-start location tracking once the map is ready.
+        map.on("load", () => {
+          geolocate.trigger();
+        });
 
         map.on("error", (e: mapboxgl.ErrorEvent) => {
           console.error("Map error:", e);
