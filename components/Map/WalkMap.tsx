@@ -111,6 +111,15 @@ export default function WalkMap({
         });
         mapInstance.current = map;
 
+        map.addControl(
+          new mb.GeolocateControl({
+            positionOptions: { enableHighAccuracy: true },
+            trackUserLocation: true,
+            showUserHeading: true,
+          }),
+          "top-right"
+        );
+
         map.on("error", (e: mapboxgl.ErrorEvent) => {
           console.error("Map error:", e);
           setStatus("Map error: " + (e.error?.message || "unknown"));
