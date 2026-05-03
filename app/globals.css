@@ -29,10 +29,19 @@ body {
   left: env(safe-area-inset-left, 0px) !important;
 }
 
-/* Make the geolocate button larger and easier to tap on mobile. */
+/* Hide the geolocate button — tracking auto-starts on load. */
 .mapboxgl-ctrl-geolocate {
-  width: 40px !important;
-  height: 40px !important;
+  display: none !important;
+}
+
+/* Smaller location dot + pulse. */
+.mapboxgl-user-location-dot {
+  width: 8px !important;
+  height: 8px !important;
+}
+
+.mapboxgl-user-location-accuracy-circle {
+  display: none !important;
 }
 
 /* Mapbox popup styling for dark theme */
