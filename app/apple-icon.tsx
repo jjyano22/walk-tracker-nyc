@@ -3,8 +3,6 @@ import { ImageResponse } from "next/og";
 export const size = { width: 180, height: 180 };
 export const contentType = "image/png";
 
-// iOS home-screen icon. iOS masks this to a rounded-rect itself, so
-// no border-radius needed — fills the whole square.
 export default function AppleIcon() {
   return new ImageResponse(
     (
@@ -15,24 +13,18 @@ export default function AppleIcon() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "#09090b",
+          background: "#0a0a0b",
         }}
       >
-        <svg
-          width="120"
-          height="120"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="#00ffd5"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <circle cx="13" cy="4" r="2" />
-          <path d="m6 15 3-2 1-4 3 2 3 4" />
-          <path d="m10 9 4 2 3 5-4 3" />
-          <path d="M6 15v5" />
-          <path d="m17 17 3 3" />
+        <svg width="112" height="112" viewBox="0 0 100 100" fill="none">
+          <path
+            d="M 30 82 L 30 50 L 70 50 L 70 18"
+            stroke="#00ffd5"
+            strokeWidth="10"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <circle cx="70" cy="18" r="8" fill="#00ffd5" />
         </svg>
       </div>
     ),

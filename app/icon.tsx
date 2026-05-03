@@ -3,8 +3,6 @@ import { ImageResponse } from "next/og";
 export const size = { width: 512, height: 512 };
 export const contentType = "image/png";
 
-// Renders a dark square with a walking-figure glyph in the app's
-// signature cyan (#00ffd5). Used for favicon, Android, PWA manifest.
 export default function Icon() {
   return new ImageResponse(
     (
@@ -15,25 +13,19 @@ export default function Icon() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "#09090b",
+          background: "#0a0a0b",
           borderRadius: 96,
         }}
       >
-        <svg
-          width="320"
-          height="320"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="#00ffd5"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <circle cx="13" cy="4" r="2" />
-          <path d="m6 15 3-2 1-4 3 2 3 4" />
-          <path d="m10 9 4 2 3 5-4 3" />
-          <path d="M6 15v5" />
-          <path d="m17 17 3 3" />
+        <svg width="320" height="320" viewBox="0 0 100 100" fill="none">
+          <path
+            d="M 30 82 L 30 50 L 70 50 L 70 18"
+            stroke="#00ffd5"
+            strokeWidth="10"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <circle cx="70" cy="18" r="8" fill="#00ffd5" />
         </svg>
       </div>
     ),
