@@ -10,6 +10,7 @@ export default function Home() {
   const [selectedNeighborhood, setSelectedNeighborhood] = useState<string | null>(null);
   const [hoveredNeighborhood, setHoveredNeighborhood] = useState<string | null>(null);
   const [selectedBoroughCodes, setSelectedBoroughCodes] = useState<string[] | null>(null);
+  const [suggestedRoute, setSuggestedRoute] = useState<GeoJSON.Feature | null>(null);
 
   return (
     <div style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh" }}>
@@ -18,12 +19,15 @@ export default function Home() {
         hoveredNeighborhood={hoveredNeighborhood}
         selectedNeighborhood={selectedNeighborhood}
         selectedBoroughCodes={selectedBoroughCodes}
+        suggestedRoute={suggestedRoute}
       />
       <Sidebar
         selectedNeighborhood={selectedNeighborhood}
         onNeighborhoodHover={setHoveredNeighborhood}
         onNeighborhoodSelect={setSelectedNeighborhood}
         onBoroughChange={(_borough, codes) => setSelectedBoroughCodes(codes)}
+        onSuggestRoute={setSuggestedRoute}
+        suggestedRoute={suggestedRoute}
       />
     </div>
   );
