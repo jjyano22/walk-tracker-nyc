@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 
+const DURATIONS = [30, 45, 60] as const;
+
 interface RouteResult {
   distance_miles: number;
   duration_min: number;
   unwalked_nearby: number;
-  error?: string;
 }
 
 export default function SuggestRoute({
@@ -24,7 +25,7 @@ export default function SuggestRoute({
   const [result, setResult] = useState<RouteResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleSuggest() {
+  async function handleSuggest(duration: number) {
     setState("locating");
     setError(null);
 
@@ -39,7 +40,7 @@ export default function SuggestRoute({
       setState("loading");
       const { latitude, longitude } = pos.coords;
       const res = await fetch(
-        `/api/suggest-route?lat=${latitude}&lng=${longitude}&duration=45`
+        `/api/suggest-route?lat=${latitude}&lng=${longitude}&duration=${duration}`
       );
       const data = await res.json();
 
@@ -67,22 +68,23 @@ export default function SuggestRoute({
   return (
     <div className="mb-4">
       {!hasRoute ? (
-        <button
-          type="button"
-          onClick={handleSuggest}
-          disabled={loading}
-          className={`w-full text-sm rounded-md border px-3 py-2 transition-colors ${
-            loading
-              ? "bg-zinc-900 border-zinc-800 text-zinc-500 cursor-not-allowed"
-              : "bg-violet-950/40 border-violet-800/50 text-violet-300 hover:bg-violet-900/40 hover:border-violet-700"
-          }`}
-        >
-          {state === "locating"
-            ? "Getting location…"
-            : state === "loading"
-              ? "Finding route…"
-              : "Suggest a 45-min walk"}
-        </button>
+        <div className="flex gap-2">
+          {DURATIONS.map((d) => (
+            <button
+              key={d}
+              type="button"
+              onClick={() => handleSuggest(d)}
+              disabled={loading}
+              className={`flex-1 text-sm rounded-md border px-2 py-2 transition-colors ${
+                loading
+                  ? "bg-zinc-900 border-zinc-800 text-zinc-500 cursor-not-allowed"
+                  : "bg-violet-950/40 border-violet-800/50 text-violet-300 hover:bg-violet-900/40 hover:border-violet-700"
+              }`}
+            >
+              {loading ? "…" : `${d}min`}
+            </button>
+          ))}
+        </div>
       ) : (
         <div className="space-y-2">
           {result && (
