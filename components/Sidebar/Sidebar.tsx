@@ -6,6 +6,7 @@ import NeighborhoodList from "./NeighborhoodList";
 import BoroughRollup from "./BoroughRollup";
 import NextUp, { NextUpData } from "./NextUp";
 import RefreshButton from "./RefreshButton";
+import SuggestRoute from "./SuggestRoute";
 import DebugInfo from "./DebugInfo";
 
 interface Stats {
@@ -32,6 +33,8 @@ interface SidebarProps {
   onNeighborhoodHover?: (code: string | null) => void;
   onNeighborhoodSelect?: (code: string) => void;
   onBoroughChange?: (borough: string | null, codes: string[]) => void;
+  onSuggestRoute?: (route: GeoJSON.Feature | null) => void;
+  suggestedRoute?: GeoJSON.Feature | null;
 }
 
 function SidebarBody({
@@ -44,6 +47,8 @@ function SidebarBody({
   selectedNeighborhood,
   onNeighborhoodHover,
   onNeighborhoodSelect,
+  onSuggestRoute,
+  suggestedRoute,
 }: {
   stats: Stats | null;
   neighborhoods: Neighborhood[];
@@ -54,6 +59,8 @@ function SidebarBody({
   selectedNeighborhood?: string | null;
   onNeighborhoodHover?: (code: string | null) => void;
   onNeighborhoodSelect?: (code: string) => void;
+  onSuggestRoute?: (route: GeoJSON.Feature | null) => void;
+  suggestedRoute?: GeoJSON.Feature | null;
 }) {
   const filteredNeighborhoods = useMemo(() => {
     if (!selectedBorough) return neighborhoods;
@@ -68,6 +75,12 @@ function SidebarBody({
       </p>
 
       <RefreshButton />
+
+      <SuggestRoute
+        onRoute={(route) => onSuggestRoute?.(route)}
+        onClear={() => onSuggestRoute?.(null)}
+        hasRoute={!!suggestedRoute}
+      />
 
       <OverallStats
         stats={stats}
@@ -134,6 +147,8 @@ export default function Sidebar({
   onNeighborhoodHover,
   onNeighborhoodSelect,
   onBoroughChange,
+  onSuggestRoute,
+  suggestedRoute,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState(false);
@@ -188,6 +203,8 @@ export default function Sidebar({
       selectedNeighborhood={selectedNeighborhood}
       onNeighborhoodHover={onNeighborhoodHover}
       onNeighborhoodSelect={onNeighborhoodSelect}
+      onSuggestRoute={onSuggestRoute}
+      suggestedRoute={suggestedRoute}
     />
   );
 

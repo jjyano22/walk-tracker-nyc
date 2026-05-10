@@ -8,6 +8,7 @@ interface WalkMapProps {
   hoveredNeighborhood?: string | null;
   selectedNeighborhood?: string | null;
   selectedBoroughCodes?: string[] | null;
+  suggestedRoute?: GeoJSON.Feature | null;
 }
 
 type GeoFeature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, unknown>>;
@@ -73,6 +74,7 @@ export default function WalkMap({
   hoveredNeighborhood,
   selectedNeighborhood,
   selectedBoroughCodes,
+  suggestedRoute,
 }: WalkMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<mapboxgl.Map | null>(null);
@@ -396,6 +398,36 @@ export default function WalkMap({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boroughCodesKey, layersReady]);
+
+  // Render/clear suggested route as a dashed purple line.
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !layersReady) return;
+
+    if (map.getLayer("suggested-route-layer")) map.removeLayer("suggested-route-layer");
+    if (map.getSource("suggested-route")) map.removeSource("suggested-route");
+
+    if (!suggestedRoute) return;
+
+    map.addSource("suggested-route", {
+      type: "geojson",
+      data: {
+        type: "FeatureCollection",
+        features: [suggestedRoute],
+      },
+    });
+    map.addLayer({
+      id: "suggested-route-layer",
+      type: "line",
+      source: "suggested-route",
+      paint: {
+        "line-color": "#a78bfa",
+        "line-width": 4,
+        "line-opacity": 0.8,
+        "line-dasharray": [2, 1.5],
+      },
+    });
+  }, [suggestedRoute, layersReady]);
 
   return (
     <>
