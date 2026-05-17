@@ -8,29 +8,9 @@ interface WalkMapProps {
   hoveredNeighborhood?: string | null;
   selectedNeighborhood?: string | null;
   selectedBoroughCodes?: string[] | null;
-  suggestedRoute?: GeoJSON.Feature | null;
 }
 
 type GeoFeature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, unknown>>;
-
-interface WalkSegmentProperties {
-  mode: string | null;
-  speed_mps: number;
-  distance_m: number;
-  duration_s: number;
-  start_time: string;
-  end_time: string;
-}
-
-type WalkSegmentFeature = GeoJSON.Feature<
-  GeoJSON.LineString,
-  WalkSegmentProperties
->;
-
-interface WalkCollection {
-  type: "FeatureCollection";
-  features: WalkSegmentFeature[];
-}
 
 function featureBBox(
   feature: GeoFeature
@@ -39,6 +19,7 @@ function featureBBox(
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
+
   const visit = (coords: unknown): void => {
     if (
       Array.isArray(coords) &&
@@ -46,21 +27,34 @@ function featureBBox(
       typeof coords[0] === "number" &&
       typeof coords[1] === "number"
     ) {
-      if (coords[0] < minX) minX = coords[0];
-      if (coords[0] > maxX) maxX = coords[0];
-      if (coords[1] < minY) minY = coords[1];
-      if (coords[1] > maxY) maxY = coords[1];
+      const x = coords[0];
+      const y = coords[1];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
       return;
     }
-    if (Array.isArray(coords)) for (const c of coords) visit(c);
+    if (Array.isArray(coords)) {
+      for (const c of coords) visit(c);
+    }
   };
+
   const geom = feature.geometry as GeoJSON.Geometry & { coordinates?: unknown };
   if (geom && "coordinates" in geom) visit(geom.coordinates);
   if (!isFinite(minX)) return null;
-  return [[minX, minY], [maxX, maxY]];
+  return [
+    [minX, minY],
+    [maxX, maxY],
+  ];
 }
 
-function responsivePadding() {
+function responsivePadding(): {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+} {
   const isDesktop =
     typeof window !== "undefined" &&
     window.matchMedia("(min-width: 768px)").matches;
@@ -74,7 +68,6 @@ export default function WalkMap({
   hoveredNeighborhood,
   selectedNeighborhood,
   selectedBoroughCodes,
-  suggestedRoute,
 }: WalkMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<mapboxgl.Map | null>(null);
@@ -119,11 +112,7 @@ export default function WalkMap({
           showUserHeading: true,
         });
         map.addControl(geolocate, "top-right");
-
-        // Auto-start location tracking once the map is ready.
-        map.on("load", () => {
-          geolocate.trigger();
-        });
+        map.on("load", () => { geolocate.trigger(); });
 
         map.on("error", (e: mapboxgl.ErrorEvent) => {
           console.error("Map error:", e);
@@ -133,15 +122,11 @@ export default function WalkMap({
         map.on("load", async () => {
           setStatus("");
 
-          // ── Walked paths (only walk segments — transit is excluded
-          // server-side) ──
+          // ── Walked paths ──
           try {
             const walkRes = await fetch("/api/walks");
-            const walkGeo = (await walkRes.json()) as WalkCollection;
-            map.addSource("walked-paths", {
-              type: "geojson",
-              data: walkGeo,
-            });
+            const walkGeo = await walkRes.json();
+            map.addSource("walked-paths", { type: "geojson", data: walkGeo });
 
             map.addLayer({
               id: "walked-paths-layer",
@@ -154,7 +139,6 @@ export default function WalkMap({
               },
             });
 
-            // Wider invisible hit layer for forgiving mobile taps.
             map.addLayer({
               id: "walked-paths-hit",
               type: "line",
@@ -168,87 +152,68 @@ export default function WalkMap({
 
             const refreshSource = async () => {
               const r = await fetch("/api/walks");
-              const geo = (await r.json()) as WalkCollection;
-              const src = map.getSource(
-                "walked-paths"
-              ) as mapboxgl.GeoJSONSource | undefined;
+              const geo = await r.json();
+              const src = map.getSource("walked-paths") as mapboxgl.GeoJSONSource | undefined;
               if (src) src.setData(geo);
             };
 
-            map.on(
-              "click",
-              "walked-paths-hit",
-              (e: mapboxgl.MapLayerMouseEvent) => {
-                const feature = e.features?.[0];
-                if (!feature) return;
-                const p = (feature.properties ?? {}) as Record<
-                  string,
-                  unknown
-                >;
-                const speed = Number(p.speed_mps) || 0;
-                const dist = Number(p.distance_m) || 0;
-                const dur = Number(p.duration_s) || 0;
-                const startTs = String(p.start_time ?? "");
-                const endTs = String(p.end_time ?? "");
+            map.on("click", "walked-paths-hit", (e: mapboxgl.MapLayerMouseEvent) => {
+              const feature = e.features?.[0];
+              if (!feature) return;
+              const p = (feature.properties ?? {}) as Record<string, unknown>;
+              const speed = Number(p.speed_mps) || 0;
+              const dist = Number(p.distance_m) || 0;
+              const dur = Number(p.duration_s) || 0;
+              const startTs = String(p.start_time ?? "");
+              const endTs = String(p.end_time ?? "");
 
-                const popupNode = document.createElement("div");
-                popupNode.innerHTML = `
-                  <div style="color:#fff;font-size:13px;min-width:160px">
-                    <div style="color:#a1a1aa;font-size:11px;margin-bottom:8px">
-                      ${speed.toFixed(1)} m/s · ${dist}m · ${dur}s
-                    </div>
-                    <button data-action="delete" data-confirm="0" style="width:100%;padding:6px 8px;background:transparent;border:1px solid #3f3f46;color:#ef4444;border-radius:6px;cursor:pointer;font-size:12px">Remove segment</button>
+              const popupNode = document.createElement("div");
+              popupNode.innerHTML = `
+                <div style="color:#fff;font-size:13px;min-width:160px">
+                  <div style="color:#a1a1aa;font-size:11px;margin-bottom:8px">
+                    ${speed.toFixed(1)} m/s · ${dist}m · ${dur}s
                   </div>
-                `;
+                  <button data-action="delete" data-confirm="0" style="width:100%;padding:6px 8px;background:transparent;border:1px solid #3f3f46;color:#ef4444;border-radius:6px;cursor:pointer;font-size:12px">Remove segment</button>
+                </div>
+              `;
 
-                activePopup.current?.remove();
-                const popup = new mb.Popup({ className: "dark-popup" })
-                  .setLngLat(e.lngLat)
-                  .setDOMContent(popupNode)
-                  .addTo(map);
-                activePopup.current = popup;
+              activePopup.current?.remove();
+              const popup = new mb.Popup({ className: "dark-popup" })
+                .setLngLat(e.lngLat)
+                .setDOMContent(popupNode)
+                .addTo(map);
+              activePopup.current = popup;
 
-                popupNode.addEventListener("click", async (ev) => {
-                  const btn = (ev.target as HTMLElement).closest(
-                    "button[data-action]"
-                  ) as HTMLButtonElement | null;
-                  if (!btn || !startTs || !endTs) return;
-
-                  if (btn.dataset.confirm !== "1") {
-                    btn.dataset.confirm = "1";
-                    btn.style.background = "#ef444420";
-                    btn.style.borderColor = "#ef4444";
-                    btn.textContent = "Tap again to confirm";
-                    return;
-                  }
-                  btn.disabled = true;
-                  btn.style.opacity = "0.5";
-                  try {
-                    const r2 = await fetch("/api/walks/delete", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        start_ts: startTs,
-                        end_ts: endTs,
-                      }),
-                    });
-                    if (!r2.ok) throw new Error(`HTTP ${r2.status}`);
-                    popup.remove();
-                    await refreshSource();
-                  } catch (err) {
-                    console.error("delete failed:", err);
-                    btn.textContent = "Failed";
-                  }
-                });
-              }
-            );
-
-            map.on("mouseenter", "walked-paths-hit", () => {
-              map.getCanvas().style.cursor = "pointer";
+              popupNode.addEventListener("click", async (ev) => {
+                const btn = (ev.target as HTMLElement).closest("button[data-action]") as HTMLButtonElement | null;
+                if (!btn || !startTs || !endTs) return;
+                if (btn.dataset.confirm !== "1") {
+                  btn.dataset.confirm = "1";
+                  btn.style.background = "#ef444420";
+                  btn.style.borderColor = "#ef4444";
+                  btn.textContent = "Tap again to confirm";
+                  return;
+                }
+                btn.disabled = true;
+                btn.style.opacity = "0.5";
+                try {
+                  const r2 = await fetch("/api/walks/delete", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ start_ts: startTs, end_ts: endTs }),
+                  });
+                  if (!r2.ok) throw new Error(`HTTP ${r2.status}`);
+                  popup.remove();
+                  await refreshSource();
+                } catch (err) {
+                  console.error("delete failed:", err);
+                  btn.textContent = "Failed";
+                }
+              });
             });
-            map.on("mouseleave", "walked-paths-hit", () => {
-              map.getCanvas().style.cursor = "";
-            });
+
+            map.on("mouseenter", "walked-paths-hit", () => { map.getCanvas().style.cursor = "pointer"; });
+            map.on("mouseleave", "walked-paths-hit", () => { map.getCanvas().style.cursor = ""; });
           } catch (e) {
             console.error("walks error:", e);
           }
@@ -259,19 +224,13 @@ export default function WalkMap({
               fetch("/data/nta-boundaries.geojson"),
               fetch("/api/neighborhoods"),
             ]);
-            const ntaGeo = (await ntaRes.json()) as GeoJSON.FeatureCollection<
-              GeoJSON.Geometry,
-              Record<string, unknown>
-            >;
+            const ntaGeo = (await ntaRes.json()) as GeoJSON.FeatureCollection<GeoJSON.Geometry, Record<string, unknown>>;
             const { neighborhoods } = await statsRes.json();
 
             const coverage: Record<string, number> = {};
-            for (const n of neighborhoods)
-              coverage[n.nta_code] = Number(n.coverage_pct) || 0;
+            for (const n of neighborhoods) coverage[n.nta_code] = Number(n.coverage_pct) || 0;
             for (const f of ntaGeo.features) {
-              const code =
-                (f.properties.NTA2020 as string | undefined) ??
-                (f.properties.nta2020 as string | undefined);
+              const code = (f.properties.NTA2020 as string | undefined) ?? (f.properties.nta2020 as string | undefined);
               if (code) {
                 f.properties.coverage_pct = coverage[code] ?? 0;
                 featuresByCode.current[code] = f as GeoFeature;
@@ -279,45 +238,9 @@ export default function WalkMap({
             }
 
             map.addSource("neighborhoods", { type: "geojson", data: ntaGeo });
-            map.addLayer(
-              {
-                id: "neighborhoods-fill",
-                type: "fill",
-                source: "neighborhoods",
-                paint: {
-                  "fill-color": [
-                    "interpolate", ["linear"], ["get", "coverage_pct"],
-                    0, "rgba(0,0,0,0)",
-                    1, "rgba(255,149,0,0.15)",
-                    10, "rgba(255,204,0,0.2)",
-                    30, "rgba(255,204,0,0.3)",
-                    60, "rgba(52,199,89,0.35)",
-                    90, "rgba(255,215,0,0.45)",
-                  ],
-                  "fill-opacity": 1,
-                },
-              },
-              "walked-paths-layer"
-            );
-            map.addLayer(
-              {
-                id: "neighborhoods-outline",
-                type: "line",
-                source: "neighborhoods",
-                paint: { "line-color": "rgba(255,255,255,0.2)", "line-width": 1 },
-              },
-              "walked-paths-layer"
-            );
-            map.addLayer(
-              {
-                id: "neighborhoods-highlight",
-                type: "fill",
-                source: "neighborhoods",
-                paint: { "fill-color": "rgba(255,255,255,0.12)", "fill-opacity": 1 },
-                filter: ["==", "NTA2020", ""],
-              },
-              "walked-paths-layer"
-            );
+            map.addLayer({ id: "neighborhoods-fill", type: "fill", source: "neighborhoods", paint: { "fill-color": ["interpolate", ["linear"], ["get", "coverage_pct"], 0, "rgba(0,0,0,0)", 1, "rgba(255,149,0,0.15)", 10, "rgba(255,204,0,0.2)", 30, "rgba(255,204,0,0.3)", 60, "rgba(52,199,89,0.35)", 90, "rgba(255,215,0,0.45)"], "fill-opacity": 1 } }, "walked-paths-layer");
+            map.addLayer({ id: "neighborhoods-outline", type: "line", source: "neighborhoods", paint: { "line-color": "rgba(255,255,255,0.2)", "line-width": 1 } }, "walked-paths-layer");
+            map.addLayer({ id: "neighborhoods-highlight", type: "fill", source: "neighborhoods", paint: { "fill-color": "rgba(255,255,255,0.12)", "fill-opacity": 1 }, filter: ["==", "NTA2020", ""] }, "walked-paths-layer");
 
             map.on("click", "neighborhoods-fill", (e: mapboxgl.MapLayerMouseEvent) => {
               const feature = e.features?.[0];
@@ -329,24 +252,48 @@ export default function WalkMap({
               activePopup.current?.remove();
               const popup = new mb.Popup({ className: "dark-popup" })
                 .setLngLat(e.lngLat)
-                .setHTML(
-                  `<div style="color:#fff;font-size:14px"><strong>${name}</strong><br/>Coverage: ${(
-                    Number(p.coverage_pct) || 0
-                  ).toFixed(1)}%</div>`
-                )
+                .setHTML(`<div style="color:#fff;font-size:14px"><strong>${name}</strong><br/>Coverage: ${(Number(p.coverage_pct) || 0).toFixed(1)}%</div>`)
                 .addTo(map);
               activePopup.current = popup;
             });
-            map.on("mouseenter", "neighborhoods-fill", () => {
-              map.getCanvas().style.cursor = "pointer";
-            });
-            map.on("mouseleave", "neighborhoods-fill", () => {
-              map.getCanvas().style.cursor = "";
-            });
+            map.on("mouseenter", "neighborhoods-fill", () => { map.getCanvas().style.cursor = "pointer"; });
+            map.on("mouseleave", "neighborhoods-fill", () => { map.getCanvas().style.cursor = ""; });
 
             setLayersReady(true);
           } catch (e) {
             console.error("neighborhoods error:", e);
+          }
+
+          // ── Park locations (green dots) ──
+          try {
+            const parkRes = await fetch("/api/park-locations");
+            const { locations } = (await parkRes.json()) as {
+              locations: Array<{ name: string; lng: number; lat: number }>;
+            };
+            map.addSource("parks", {
+              type: "geojson",
+              data: {
+                type: "FeatureCollection",
+                features: locations.map((p) => ({
+                  type: "Feature" as const,
+                  geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
+                  properties: { name: p.name },
+                })),
+              },
+            });
+            map.addLayer({
+              id: "parks-dots",
+              type: "circle",
+              source: "parks",
+              paint: {
+                "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 2, 14, 4, 16, 6],
+                "circle-color": "#22c55e",
+                "circle-opacity": 0.7,
+                "circle-stroke-width": 0,
+              },
+            });
+          } catch (e) {
+            console.error("parks error:", e);
           }
         });
       } catch (e) {
@@ -361,9 +308,7 @@ export default function WalkMap({
   useEffect(() => {
     const map = mapInstance.current;
     if (!map || !layersReady) return;
-    map.setFilter("neighborhoods-highlight", [
-      "==", "NTA2020", hoveredNeighborhood ?? "",
-    ]);
+    map.setFilter("neighborhoods-highlight", ["==", "NTA2020", hoveredNeighborhood ?? ""]);
   }, [hoveredNeighborhood, layersReady]);
 
   useEffect(() => {
@@ -393,51 +338,15 @@ export default function WalkMap({
       if (bb[1][1] > maxY) maxY = bb[1][1];
     }
     if (!isFinite(minX)) return;
-    map.fitBounds([[minX, minY], [maxX, maxY]], {
-      padding: responsivePadding(), duration: 800, maxZoom: 13,
-    });
+    map.fitBounds([[minX, minY], [maxX, maxY]], { padding: responsivePadding(), duration: 800, maxZoom: 13 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boroughCodesKey, layersReady]);
-
-  // Render/clear suggested route as a dashed purple line.
-  useEffect(() => {
-    const map = mapInstance.current;
-    if (!map || !layersReady) return;
-
-    if (map.getLayer("suggested-route-layer")) map.removeLayer("suggested-route-layer");
-    if (map.getSource("suggested-route")) map.removeSource("suggested-route");
-
-    if (!suggestedRoute) return;
-
-    map.addSource("suggested-route", {
-      type: "geojson",
-      data: {
-        type: "FeatureCollection",
-        features: [suggestedRoute],
-      },
-    });
-    map.addLayer({
-      id: "suggested-route-layer",
-      type: "line",
-      source: "suggested-route",
-      paint: {
-        "line-color": "#a78bfa",
-        "line-width": 4,
-        "line-opacity": 0.8,
-        "line-dasharray": [2, 1.5],
-      },
-    });
-  }, [suggestedRoute, layersReady]);
 
   return (
     <>
       <div ref={mapRef} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
       {status && (
-        <div style={{
-          position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          background: "#09090b", color: "#a1a1aa", fontSize: "18px",
-        }}>
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#09090b", color: "#a1a1aa", fontSize: "18px" }}>
           {status}
         </div>
       )}
