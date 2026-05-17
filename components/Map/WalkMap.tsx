@@ -286,10 +286,11 @@ export default function WalkMap({
               type: "circle",
               source: "parks",
               paint: {
-                "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 2, 14, 4, 16, 6],
+                "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 3, 13, 5, 16, 8],
                 "circle-color": "#22c55e",
-                "circle-opacity": 0.7,
-                "circle-stroke-width": 0,
+                "circle-opacity": 0.85,
+                "circle-stroke-width": 1,
+                "circle-stroke-color": "#16a34a",
               },
             });
           } catch (e) {
