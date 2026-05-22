@@ -101,8 +101,8 @@ export default function WalkMap({
         const map = new mb.Map({
           container: mapRef.current!,
           style: "mapbox://styles/mapbox/dark-v11",
-          center: [-73.935242, 40.73061],
-          zoom: 12,
+          center: [0, 20],
+          zoom: 2,
         });
         mapInstance.current = map;
 
@@ -214,6 +214,21 @@ export default function WalkMap({
 
             map.on("mouseenter", "walked-paths-hit", () => { map.getCanvas().style.cursor = "pointer"; });
             map.on("mouseleave", "walked-paths-hit", () => { map.getCanvas().style.cursor = ""; });
+
+            // Auto-fit map to walk data extent.
+            try {
+              const boundsRes = await fetch("/api/walks/bounds");
+              const { bounds } = await boundsRes.json();
+              if (bounds) {
+                map.fitBounds(bounds, {
+                  padding: responsivePadding(),
+                  duration: 1000,
+                  maxZoom: 14,
+                });
+              }
+            } catch (e) {
+              console.error("bounds error:", e);
+            }
           } catch (e) {
             console.error("walks error:", e);
           }
