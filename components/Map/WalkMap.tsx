@@ -128,6 +128,66 @@ export default function WalkMap({
             const walkGeo = await walkRes.json();
             map.addSource("walked-paths", { type: "geojson", data: walkGeo });
 
+            // Build a point source from walk segment midpoints for the
+            // heatmap layer (visible at low zoom as a glow).
+            const heatPoints: GeoJSON.Feature[] = [];
+            for (const f of walkGeo.features ?? []) {
+              const coords = f.geometry?.coordinates;
+              if (coords && coords.length >= 2) {
+                const [a, b] = coords;
+                heatPoints.push({
+                  type: "Feature",
+                  geometry: {
+                    type: "Point",
+                    coordinates: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2],
+                  },
+                  properties: {},
+                });
+              }
+            }
+            map.addSource("walk-heat", {
+              type: "geojson",
+              data: { type: "FeatureCollection", features: heatPoints },
+            });
+
+            // Heatmap: visible at low zoom, fades out as you zoom in.
+            map.addLayer({
+              id: "walk-heatmap",
+              type: "heatmap",
+              source: "walk-heat",
+              maxzoom: 14,
+              paint: {
+                "heatmap-weight": 1,
+                "heatmap-intensity": [
+                  "interpolate", ["linear"], ["zoom"],
+                  0, 1,
+                  14, 0,
+                ],
+                "heatmap-color": [
+                  "interpolate", ["linear"], ["heatmap-density"],
+                  0, "rgba(0,0,0,0)",
+                  0.1, "rgba(0,255,213,0.15)",
+                  0.3, "rgba(0,255,213,0.3)",
+                  0.5, "rgba(0,255,213,0.5)",
+                  0.7, "rgba(0,255,213,0.65)",
+                  1, "rgba(0,255,213,0.8)",
+                ],
+                "heatmap-radius": [
+                  "interpolate", ["linear"], ["zoom"],
+                  2, 8,
+                  5, 15,
+                  8, 25,
+                  12, 40,
+                ],
+                "heatmap-opacity": [
+                  "interpolate", ["linear"], ["zoom"],
+                  10, 0.8,
+                  14, 0,
+                ],
+              },
+            });
+
+            // Line paths: fade in as you zoom in past the heatmap.
             map.addLayer({
               id: "walked-paths-layer",
               type: "line",
@@ -135,7 +195,11 @@ export default function WalkMap({
               paint: {
                 "line-color": "#00ffd5",
                 "line-width": 3,
-                "line-opacity": 0.85,
+                "line-opacity": [
+                  "interpolate", ["linear"], ["zoom"],
+                  10, 0,
+                  13, 0.85,
+                ],
               },
             });
 
