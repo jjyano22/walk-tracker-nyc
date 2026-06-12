@@ -8,6 +8,7 @@ interface WalkMapProps {
   hoveredNeighborhood?: string | null;
   selectedNeighborhood?: string | null;
   selectedBoroughCodes?: string[] | null;
+  suggestedRoute?: GeoJSON.Feature | null;
 }
 
 type GeoFeature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, unknown>>;
@@ -68,6 +69,7 @@ export default function WalkMap({
   hoveredNeighborhood,
   selectedNeighborhood,
   selectedBoroughCodes,
+  suggestedRoute,
 }: WalkMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<mapboxgl.Map | null>(null);
@@ -85,6 +87,20 @@ export default function WalkMap({
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
+
+    // Kick off all data fetches immediately so they run in parallel
+    // with the Mapbox CDN script + style load instead of after it.
+    const walksPromise = fetch("/api/walks").then((r) => r.json());
+    const boundsPromise = fetch("/api/walks/bounds")
+      .then((r) => r.json())
+      .catch(() => ({ bounds: null }));
+    const ntaPromise = fetch("/data/nta-boundaries.geojson").then((r) =>
+      r.json()
+    );
+    const nbStatsPromise = fetch("/api/neighborhoods").then((r) => r.json());
+    const parkLocsPromise = fetch("/api/park-locations")
+      .then((r) => r.json())
+      .catch(() => ({ locations: [] }));
 
     const win = window as unknown as { mapboxgl?: typeof mapboxgl };
 
@@ -124,23 +140,18 @@ export default function WalkMap({
 
           // ── Walked paths ──
           try {
-            const walkRes = await fetch("/api/walks");
-            const walkGeo = await walkRes.json();
+            const walkGeo = await walksPromise;
             map.addSource("walked-paths", { type: "geojson", data: walkGeo });
 
-            // Build a point source from walk segment midpoints for the
+            // Build a point source from session coordinates for the
             // heatmap layer (visible at low zoom as a glow).
             const heatPoints: GeoJSON.Feature[] = [];
             for (const f of walkGeo.features ?? []) {
-              const coords = f.geometry?.coordinates;
-              if (coords && coords.length >= 2) {
-                const [a, b] = coords;
+              const coords: number[][] = f.geometry?.coordinates ?? [];
+              for (const c of coords) {
                 heatPoints.push({
                   type: "Feature",
-                  geometry: {
-                    type: "Point",
-                    coordinates: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2],
-                  },
+                  geometry: { type: "Point", coordinates: c },
                   properties: {},
                 });
               }
@@ -225,19 +236,20 @@ export default function WalkMap({
               const feature = e.features?.[0];
               if (!feature) return;
               const p = (feature.properties ?? {}) as Record<string, unknown>;
-              const speed = Number(p.speed_mps) || 0;
               const dist = Number(p.distance_m) || 0;
               const dur = Number(p.duration_s) || 0;
               const startTs = String(p.start_time ?? "");
               const endTs = String(p.end_time ?? "");
+              const miles = (dist / 1609.34).toFixed(2);
+              const mins = Math.round(dur / 60);
 
               const popupNode = document.createElement("div");
               popupNode.innerHTML = `
                 <div style="color:#fff;font-size:13px;min-width:160px">
                   <div style="color:#a1a1aa;font-size:11px;margin-bottom:8px">
-                    ${speed.toFixed(1)} m/s · ${dist}m · ${dur}s
+                    ${miles} mi · ${mins} min walk
                   </div>
-                  <button data-action="delete" data-confirm="0" style="width:100%;padding:6px 8px;background:transparent;border:1px solid #3f3f46;color:#ef4444;border-radius:6px;cursor:pointer;font-size:12px">Remove segment</button>
+                  <button data-action="delete" data-confirm="0" style="width:100%;padding:6px 8px;background:transparent;border:1px solid #3f3f46;color:#ef4444;border-radius:6px;cursor:pointer;font-size:12px">Remove this walk</button>
                 </div>
               `;
 
@@ -281,8 +293,7 @@ export default function WalkMap({
 
             // Auto-fit map to walk data extent.
             try {
-              const boundsRes = await fetch("/api/walks/bounds");
-              const { bounds } = await boundsRes.json();
+              const { bounds } = await boundsPromise;
               if (bounds) {
                 map.fitBounds(bounds, {
                   padding: responsivePadding(),
@@ -299,12 +310,12 @@ export default function WalkMap({
 
           // ── Neighborhoods ──
           try {
-            const [ntaRes, statsRes] = await Promise.all([
-              fetch("/data/nta-boundaries.geojson"),
-              fetch("/api/neighborhoods"),
+            const [ntaGeoRaw, nbStats] = await Promise.all([
+              ntaPromise,
+              nbStatsPromise,
             ]);
-            const ntaGeo = (await ntaRes.json()) as GeoJSON.FeatureCollection<GeoJSON.Geometry, Record<string, unknown>>;
-            const { neighborhoods } = await statsRes.json();
+            const ntaGeo = ntaGeoRaw as GeoJSON.FeatureCollection<GeoJSON.Geometry, Record<string, unknown>>;
+            const { neighborhoods } = nbStats;
 
             const coverage: Record<string, number> = {};
             for (const n of neighborhoods) coverage[n.nta_code] = Number(n.coverage_pct) || 0;
@@ -345,8 +356,7 @@ export default function WalkMap({
 
           // ── Park locations (green dots) ──
           try {
-            const parkRes = await fetch("/api/park-locations");
-            const { locations } = (await parkRes.json()) as {
+            const { locations } = (await parkLocsPromise) as {
               locations: Array<{ name: string; lng: number; lat: number }>;
             };
             map.addSource("parks", {
@@ -421,6 +431,33 @@ export default function WalkMap({
     map.fitBounds([[minX, minY], [maxX, maxY]], { padding: responsivePadding(), duration: 800, maxZoom: 13 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boroughCodesKey, layersReady]);
+
+  // Render/clear suggested route as a dashed purple line.
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !layersReady) return;
+
+    if (map.getLayer("suggested-route-layer")) map.removeLayer("suggested-route-layer");
+    if (map.getSource("suggested-route")) map.removeSource("suggested-route");
+
+    if (!suggestedRoute) return;
+
+    map.addSource("suggested-route", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [suggestedRoute] },
+    });
+    map.addLayer({
+      id: "suggested-route-layer",
+      type: "line",
+      source: "suggested-route",
+      paint: {
+        "line-color": "#a78bfa",
+        "line-width": 4,
+        "line-opacity": 0.8,
+        "line-dasharray": [2, 1.5],
+      },
+    });
+  }, [suggestedRoute, layersReady]);
 
   return (
     <>

@@ -4,13 +4,82 @@ import {
   classifySegments,
   isWalkable,
   loadModes,
-  walkedDistanceMeters,
-  walkedDistanceRawMeters,
   type RawPoint,
+  type Segment,
 } from "@/lib/walkClassify";
 
 export const dynamic = "force-dynamic";
-export const revalidate = 0;
+
+// Round coordinates to ~1m precision to shrink the JSON payload.
+function round5(n: number): number {
+  return Math.round(n * 1e5) / 1e5;
+}
+
+interface SessionFeature {
+  type: "Feature";
+  geometry: { type: "LineString"; coordinates: number[][] };
+  properties: {
+    start_time: string;
+    end_time: string;
+    distance_m: number;
+    duration_s: number;
+    point_count: number;
+  };
+}
+
+// Merge contiguous walkable segments (prev.bIdx === next.aIdx) into
+// one LineString per walking session. Cuts feature count from one-
+// per-GPS-pair (thousands) to one-per-walk (dozens), which is the
+// main driver of payload size and map render time.
+function mergeSessions(segments: Segment[]): SessionFeature[] {
+  const sessions: SessionFeature[] = [];
+  let coords: number[][] = [];
+  let startTime = "";
+  let endTime = "";
+  let distance = 0;
+  let duration = 0;
+  let lastBIdx = -1;
+
+  const flush = () => {
+    if (coords.length >= 2) {
+      sessions.push({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: coords },
+        properties: {
+          start_time: startTime,
+          end_time: endTime,
+          distance_m: Math.round(distance),
+          duration_s: Math.round(duration),
+          point_count: coords.length,
+        },
+      });
+    }
+    coords = [];
+    distance = 0;
+    duration = 0;
+    lastBIdx = -1;
+  };
+
+  for (const s of segments) {
+    if (!isWalkable(s)) {
+      flush();
+      continue;
+    }
+    if (coords.length === 0 || s.aIdx !== lastBIdx) {
+      flush();
+      coords.push([round5(s.a.lng), round5(s.a.lat)]);
+      startTime = s.startTime;
+    }
+    coords.push([round5(s.b.lng), round5(s.b.lat)]);
+    endTime = s.endTime;
+    distance += s.distanceM;
+    duration += s.durationS;
+    lastBIdx = s.bIdx;
+  }
+  flush();
+
+  return sessions;
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -44,51 +113,30 @@ export async function GET(request: Request) {
     }));
 
     const allSegments = classifySegments(points, modes);
-    const walkSegments = allSegments.filter(isWalkable);
+    const features = mergeSessions(allSegments);
 
-    const features = walkSegments.map((s) => ({
-      type: "Feature" as const,
-      geometry: {
-        type: "LineString" as const,
-        coordinates: [
-          [s.a.lng, s.a.lat],
-          [s.b.lng, s.b.lat],
-        ],
-      },
-      properties: {
-        speed_mps: Number(s.speedMps.toFixed(2)),
-        distance_m: Math.round(s.distanceM),
-        duration_s: Math.round(s.durationS),
-        start_time: s.startTime,
-        end_time: s.endTime,
-        mode: s.manualMode,
-      },
-    }));
-
-    const rawMeters = walkedDistanceRawMeters(allSegments);
-    const smoothedMeters = walkedDistanceMeters(allSegments);
-    const stationaryCount = allSegments.filter(
-      (s) => s.runType === "stationary"
-    ).length;
-    const transitCount = allSegments.filter(
-      (s) => s.runType === "transit"
-    ).length;
     const summary = {
-      total_segments: features.length,
+      total_sessions: features.length,
       total_points: points.length,
-      excluded_segments: allSegments.length - walkSegments.length,
-      stationary_segments: stationaryCount,
-      transit_segments: transitCount,
-      raw_miles: Number((rawMeters / 1609.34).toFixed(2)),
-      smoothed_miles: Number((smoothedMeters / 1609.34).toFixed(2)),
+      excluded_segments: allSegments.filter((s) => !isWalkable(s)).length,
     };
     console.log("[walks] summary", summary);
 
-    return Response.json({
-      type: "FeatureCollection",
-      features,
-      _summary: summary,
-    });
+    return Response.json(
+      {
+        type: "FeatureCollection",
+        features,
+        _summary: summary,
+      },
+      {
+        headers: {
+          // Serve from Vercel's CDN for a minute; refresh in the
+          // background. Repeat opens are instant; new walks appear
+          // within ~60s without any client change.
+          "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+        },
+      }
+    );
   } catch (error) {
     console.error("Walks API error:", error);
     return Response.json(

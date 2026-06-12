@@ -3,13 +3,9 @@
 import { useEffect, useState } from "react";
 
 interface WalksSummary {
-  total_segments: number;
+  total_sessions: number;
   total_points: number;
   excluded_segments: number;
-  stationary_segments?: number;
-  transit_segments?: number;
-  raw_miles?: number;
-  smoothed_miles?: number;
 }
 
 export default function DebugInfo() {
@@ -32,36 +28,11 @@ export default function DebugInfo() {
       {error && <div className="text-red-400">{error}</div>}
       {!summary && !error && <div>loading…</div>}
       {summary && (
-        <>
-          <div>
-            walk segs: <span className="text-zinc-400">{summary.total_segments}</span>
-          </div>
-          <div>
-            excluded: <span className="text-zinc-400">{summary.excluded_segments}</span>
-            {summary.transit_segments != null && (
-              <>
-                {" "}(transit{" "}
-                <span className="text-zinc-400">{summary.transit_segments}</span>,
-                stationary{" "}
-                <span className="text-zinc-400">
-                  {summary.stationary_segments}
-                </span>
-                )
-              </>
-            )}
-          </div>
-          <div>
-            pts: <span className="text-zinc-400">{summary.total_points}</span>
-          </div>
-          {summary.raw_miles != null && summary.smoothed_miles != null && (
-            <div>
-              miles raw:{" "}
-              <span className="text-zinc-400">{summary.raw_miles}</span>{" "}
-              → smoothed:{" "}
-              <span className="text-zinc-400">{summary.smoothed_miles}</span>
-            </div>
-          )}
-        </>
+        <div>
+          walks: <span className="text-zinc-400">{summary.total_sessions}</span>{" "}
+          pts: <span className="text-zinc-400">{summary.total_points}</span>{" "}
+          excluded: <span className="text-zinc-400">{summary.excluded_segments}</span>
+        </div>
       )}
     </div>
   );

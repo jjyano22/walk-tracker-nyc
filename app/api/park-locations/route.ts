@@ -62,7 +62,15 @@ export async function GET() {
       });
     }
 
-    return Response.json({ locations });
+    return Response.json(
+      { locations },
+      {
+        headers: {
+          // Static dataset — cache hard at the CDN.
+          "Cache-Control": "public, s-maxage=86400, stale-while-revalidate=604800",
+        },
+      }
+    );
   } catch (error) {
     console.error("Park locations error:", error);
     return Response.json({ locations: [] }, { status: 500 });

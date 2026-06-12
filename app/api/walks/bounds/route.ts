@@ -21,12 +21,19 @@ export async function GET() {
       return Response.json({ bounds: null });
     }
 
-    return Response.json({
-      bounds: [
-        [Number(r.min_lng), Number(r.min_lat)],
-        [Number(r.max_lng), Number(r.max_lat)],
-      ],
-    });
+    return Response.json(
+      {
+        bounds: [
+          [Number(r.min_lng), Number(r.min_lat)],
+          [Number(r.max_lng), Number(r.max_lat)],
+        ],
+      },
+      {
+        headers: {
+          "Cache-Control": "public, s-maxage=300, stale-while-revalidate=3600",
+        },
+      }
+    );
   } catch (error) {
     console.error("Walks bounds error:", error);
     return Response.json({ bounds: null }, { status: 500 });
