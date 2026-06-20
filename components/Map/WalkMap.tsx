@@ -8,7 +8,6 @@ interface WalkMapProps {
   hoveredNeighborhood?: string | null;
   selectedNeighborhood?: string | null;
   selectedBoroughCodes?: string[] | null;
-  suggestedRoute?: GeoJSON.Feature | null;
 }
 
 type GeoFeature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, unknown>>;
@@ -16,52 +15,40 @@ type GeoFeature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, unknown>>;
 function featureBBox(
   feature: GeoFeature
 ): [[number, number], [number, number]] | null {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const visit = (coords: unknown): void => {
-    if (
-      Array.isArray(coords) &&
-      coords.length >= 2 &&
-      typeof coords[0] === "number" &&
-      typeof coords[1] === "number"
-    ) {
-      const x = coords[0];
-      const y = coords[1];
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
+    if (Array.isArray(coords) && coords.length >= 2 && typeof coords[0] === "number" && typeof coords[1] === "number") {
+      if (coords[0] < minX) minX = coords[0];
+      if (coords[0] > maxX) maxX = coords[0];
+      if (coords[1] < minY) minY = coords[1];
+      if (coords[1] > maxY) maxY = coords[1];
       return;
     }
-    if (Array.isArray(coords)) {
-      for (const c of coords) visit(c);
-    }
+    if (Array.isArray(coords)) for (const c of coords) visit(c);
   };
-
   const geom = feature.geometry as GeoJSON.Geometry & { coordinates?: unknown };
   if (geom && "coordinates" in geom) visit(geom.coordinates);
   if (!isFinite(minX)) return null;
-  return [
-    [minX, minY],
-    [maxX, maxY],
-  ];
+  return [[minX, minY], [maxX, maxY]];
 }
 
-function responsivePadding(): {
-  top: number;
-  bottom: number;
-  left: number;
-  right: number;
-} {
-  const isDesktop =
-    typeof window !== "undefined" &&
-    window.matchMedia("(min-width: 768px)").matches;
+function responsivePadding() {
+  const isDesktop = typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches;
   return isDesktop
     ? { top: 60, bottom: 60, left: 60, right: 340 }
     : { top: 60, bottom: 220, left: 40, right: 40 };
+}
+
+// Get user position silently (no prompt if already granted).
+function getUserPosition(): Promise<{ lng: number; lat: number } | null> {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) { resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lng: pos.coords.longitude, lat: pos.coords.latitude }),
+      () => resolve(null),
+      { enableHighAccuracy: false, timeout: 3000, maximumAge: 60000 }
+    );
+  });
 }
 
 export default function WalkMap({
@@ -69,7 +56,6 @@ export default function WalkMap({
   hoveredNeighborhood,
   selectedNeighborhood,
   selectedBoroughCodes,
-  suggestedRoute,
 }: WalkMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<mapboxgl.Map | null>(null);
@@ -80,27 +66,20 @@ export default function WalkMap({
   const [status, setStatus] = useState("Loading map...");
   const [layersReady, setLayersReady] = useState(false);
 
-  useEffect(() => {
-    onClickRef.current = onNeighborhoodClick;
-  }, [onNeighborhoodClick]);
+  useEffect(() => { onClickRef.current = onNeighborhoodClick; }, [onNeighborhoodClick]);
 
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
 
-    // Kick off all data fetches immediately so they run in parallel
-    // with the Mapbox CDN script + style load instead of after it.
-    const walksPromise = fetch("/api/walks").then((r) => r.json());
-    const boundsPromise = fetch("/api/walks/bounds")
-      .then((r) => r.json())
-      .catch(() => ({ bounds: null }));
-    const ntaPromise = fetch("/data/nta-boundaries.geojson").then((r) =>
-      r.json()
-    );
-    const nbStatsPromise = fetch("/api/neighborhoods").then((r) => r.json());
-    const parkLocsPromise = fetch("/api/park-locations")
-      .then((r) => r.json())
-      .catch(() => ({ locations: [] }));
+    // Start data fetches + geolocation immediately, in parallel with
+    // mapbox CDN script load.
+    const walksP = fetch("/api/walks").then((r) => r.json());
+    const boundsP = fetch("/api/walks/bounds").then((r) => r.json()).catch(() => ({ bounds: null }));
+    const ntaP = fetch("/data/nta-boundaries.geojson").then((r) => r.json());
+    const nbStatsP = fetch("/api/neighborhoods").then((r) => r.json());
+    const parkLocsP = fetch("/api/park-locations").then((r) => r.json()).catch(() => ({ locations: [] }));
+    const userPosP = getUserPosition();
 
     const win = window as unknown as { mapboxgl?: typeof mapboxgl };
 
@@ -114,21 +93,65 @@ export default function WalkMap({
         const mb = win.mapboxgl!;
         mb.accessToken = mapboxToken;
 
+        // Resolve initial center: user position > data bounds > NYC default.
+        const [userPos, boundsData] = await Promise.all([userPosP, boundsP]);
+        let initCenter: [number, number] = [-73.935, 40.730];
+        let initZoom = 13;
+        if (userPos) {
+          initCenter = [userPos.lng, userPos.lat];
+          initZoom = 14;
+        } else if (boundsData.bounds) {
+          const [[w, s], [e, n]] = boundsData.bounds;
+          initCenter = [(w + e) / 2, (s + n) / 2];
+          initZoom = 12;
+        }
+
         const map = new mb.Map({
           container: mapRef.current!,
           style: "mapbox://styles/mapbox/dark-v11",
-          center: [0, 20],
-          zoom: 2,
+          center: initCenter,
+          zoom: initZoom,
         });
         mapInstance.current = map;
 
-        const geolocate = new mb.GeolocateControl({
-          positionOptions: { enableHighAccuracy: true },
-          trackUserLocation: true,
-          showUserHeading: true,
+        // Silent location tracking via browser API — no mapbox control,
+        // no permission prompt (already granted). Custom dot layer.
+        map.on("load", () => {
+          map.addSource("user-location", {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] },
+          });
+          map.addLayer({
+            id: "user-location-dot",
+            type: "circle",
+            source: "user-location",
+            paint: {
+              "circle-radius": 5,
+              "circle-color": "#4285f4",
+              "circle-stroke-width": 2,
+              "circle-stroke-color": "#fff",
+            },
+          });
+          if (navigator.geolocation) {
+            navigator.geolocation.watchPosition(
+              (pos) => {
+                const src = map.getSource("user-location") as mapboxgl.GeoJSONSource | undefined;
+                if (src) {
+                  src.setData({
+                    type: "FeatureCollection",
+                    features: [{
+                      type: "Feature",
+                      geometry: { type: "Point", coordinates: [pos.coords.longitude, pos.coords.latitude] },
+                      properties: {},
+                    }],
+                  });
+                }
+              },
+              () => {},
+              { enableHighAccuracy: true, maximumAge: 10000 }
+            );
+          }
         });
-        map.addControl(geolocate, "top-right");
-        map.on("load", () => { geolocate.trigger(); });
 
         map.on("error", (e: mapboxgl.ErrorEvent) => {
           console.error("Map error:", e);
@@ -140,89 +163,41 @@ export default function WalkMap({
 
           // ── Walked paths ──
           try {
-            const walkGeo = await walksPromise;
+            const walkGeo = await walksP;
             map.addSource("walked-paths", { type: "geojson", data: walkGeo });
 
-            // Build a point source from session coordinates for the
-            // heatmap layer (visible at low zoom as a glow).
-            const heatPoints: GeoJSON.Feature[] = [];
+            // Heatmap for low zoom visibility
+            const heatPts: GeoJSON.Feature[] = [];
             for (const f of walkGeo.features ?? []) {
               const coords: number[][] = f.geometry?.coordinates ?? [];
               for (const c of coords) {
-                heatPoints.push({
-                  type: "Feature",
-                  geometry: { type: "Point", coordinates: c },
-                  properties: {},
-                });
+                heatPts.push({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} });
               }
             }
-            map.addSource("walk-heat", {
-              type: "geojson",
-              data: { type: "FeatureCollection", features: heatPoints },
-            });
-
-            // Heatmap: visible at low zoom, fades out as you zoom in.
+            map.addSource("walk-heat", { type: "geojson", data: { type: "FeatureCollection", features: heatPts } });
             map.addLayer({
-              id: "walk-heatmap",
-              type: "heatmap",
-              source: "walk-heat",
-              maxzoom: 14,
+              id: "walk-heatmap", type: "heatmap", source: "walk-heat", maxzoom: 14,
               paint: {
                 "heatmap-weight": 1,
-                "heatmap-intensity": [
-                  "interpolate", ["linear"], ["zoom"],
-                  0, 1,
-                  14, 0,
-                ],
-                "heatmap-color": [
-                  "interpolate", ["linear"], ["heatmap-density"],
-                  0, "rgba(0,0,0,0)",
-                  0.1, "rgba(0,255,213,0.15)",
-                  0.3, "rgba(0,255,213,0.3)",
-                  0.5, "rgba(0,255,213,0.5)",
-                  0.7, "rgba(0,255,213,0.65)",
-                  1, "rgba(0,255,213,0.8)",
-                ],
-                "heatmap-radius": [
-                  "interpolate", ["linear"], ["zoom"],
-                  2, 8,
-                  5, 15,
-                  8, 25,
-                  12, 40,
-                ],
-                "heatmap-opacity": [
-                  "interpolate", ["linear"], ["zoom"],
-                  10, 0.8,
-                  14, 0,
-                ],
+                "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 1, 14, 0],
+                "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"], 0, "rgba(0,0,0,0)", 0.1, "rgba(0,255,213,0.15)", 0.3, "rgba(0,255,213,0.3)", 0.5, "rgba(0,255,213,0.5)", 0.7, "rgba(0,255,213,0.65)", 1, "rgba(0,255,213,0.8)"],
+                "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 2, 8, 5, 15, 8, 25, 12, 40],
+                "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.8, 14, 0],
               },
             });
 
-            // Line paths: fade in as you zoom in past the heatmap.
             map.addLayer({
-              id: "walked-paths-layer",
-              type: "line",
-              source: "walked-paths",
+              id: "walked-paths-layer", type: "line", source: "walked-paths",
               paint: {
                 "line-color": "#00ffd5",
                 "line-width": 3,
-                "line-opacity": [
-                  "interpolate", ["linear"], ["zoom"],
-                  10, 0,
-                  13, 0.85,
-                ],
+                "line-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0, 13, 0.85],
               },
             });
 
             map.addLayer({
-              id: "walked-paths-hit",
-              type: "line",
-              source: "walked-paths",
-              paint: {
-                "line-color": "#000",
-                "line-opacity": 0,
-                "line-width": 22,
-              },
+              id: "walked-paths-hit", type: "line", source: "walked-paths",
+              paint: { "line-color": "#000", "line-opacity": 0, "line-width": 22 },
             });
 
             const refreshSource = async () => {
@@ -246,85 +221,41 @@ export default function WalkMap({
               const popupNode = document.createElement("div");
               popupNode.innerHTML = `
                 <div style="color:#fff;font-size:13px;min-width:160px">
-                  <div style="color:#a1a1aa;font-size:11px;margin-bottom:8px">
-                    ${miles} mi · ${mins} min walk
-                  </div>
+                  <div style="color:#a1a1aa;font-size:11px;margin-bottom:8px">${miles} mi · ${mins} min</div>
                   <button data-action="delete" data-confirm="0" style="width:100%;padding:6px 8px;background:transparent;border:1px solid #3f3f46;color:#ef4444;border-radius:6px;cursor:pointer;font-size:12px">Remove this walk</button>
                 </div>
               `;
-
               activePopup.current?.remove();
-              const popup = new mb.Popup({ className: "dark-popup" })
-                .setLngLat(e.lngLat)
-                .setDOMContent(popupNode)
-                .addTo(map);
+              const popup = new mb.Popup({ className: "dark-popup" }).setLngLat(e.lngLat).setDOMContent(popupNode).addTo(map);
               activePopup.current = popup;
 
               popupNode.addEventListener("click", async (ev) => {
                 const btn = (ev.target as HTMLElement).closest("button[data-action]") as HTMLButtonElement | null;
                 if (!btn || !startTs || !endTs) return;
-                if (btn.dataset.confirm !== "1") {
-                  btn.dataset.confirm = "1";
-                  btn.style.background = "#ef444420";
-                  btn.style.borderColor = "#ef4444";
-                  btn.textContent = "Tap again to confirm";
-                  return;
-                }
-                btn.disabled = true;
-                btn.style.opacity = "0.5";
+                if (btn.dataset.confirm !== "1") { btn.dataset.confirm = "1"; btn.style.background = "#ef444420"; btn.style.borderColor = "#ef4444"; btn.textContent = "Tap again to confirm"; return; }
+                btn.disabled = true; btn.style.opacity = "0.5";
                 try {
-                  const r2 = await fetch("/api/walks/delete", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ start_ts: startTs, end_ts: endTs }),
-                  });
+                  const r2 = await fetch("/api/walks/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ start_ts: startTs, end_ts: endTs }) });
                   if (!r2.ok) throw new Error(`HTTP ${r2.status}`);
                   popup.remove();
                   await refreshSource();
-                } catch (err) {
-                  console.error("delete failed:", err);
-                  btn.textContent = "Failed";
-                }
+                } catch (err) { console.error("delete failed:", err); btn.textContent = "Failed"; }
               });
             });
 
             map.on("mouseenter", "walked-paths-hit", () => { map.getCanvas().style.cursor = "pointer"; });
             map.on("mouseleave", "walked-paths-hit", () => { map.getCanvas().style.cursor = ""; });
-
-            // Auto-fit map to walk data extent.
-            try {
-              const { bounds } = await boundsPromise;
-              if (bounds) {
-                map.fitBounds(bounds, {
-                  padding: responsivePadding(),
-                  duration: 1000,
-                  maxZoom: 14,
-                });
-              }
-            } catch (e) {
-              console.error("bounds error:", e);
-            }
-          } catch (e) {
-            console.error("walks error:", e);
-          }
+          } catch (e) { console.error("walks error:", e); }
 
           // ── Neighborhoods ──
           try {
-            const [ntaGeoRaw, nbStats] = await Promise.all([
-              ntaPromise,
-              nbStatsPromise,
-            ]);
-            const ntaGeo = ntaGeoRaw as GeoJSON.FeatureCollection<GeoJSON.Geometry, Record<string, unknown>>;
+            const [ntaGeo, nbStats] = await Promise.all([ntaP, nbStatsP]);
             const { neighborhoods } = nbStats;
-
             const coverage: Record<string, number> = {};
             for (const n of neighborhoods) coverage[n.nta_code] = Number(n.coverage_pct) || 0;
             for (const f of ntaGeo.features) {
               const code = (f.properties.NTA2020 as string | undefined) ?? (f.properties.nta2020 as string | undefined);
-              if (code) {
-                f.properties.coverage_pct = coverage[code] ?? 0;
-                featuresByCode.current[code] = f as GeoFeature;
-              }
+              if (code) { f.properties.coverage_pct = coverage[code] ?? 0; featuresByCode.current[code] = f as GeoFeature; }
             }
 
             map.addSource("neighborhoods", { type: "geojson", data: ntaGeo });
@@ -340,56 +271,22 @@ export default function WalkMap({
               const name = (p.NTAName as string) || (p.ntaname as string) || code;
               onClickRef.current?.(code, name);
               activePopup.current?.remove();
-              const popup = new mb.Popup({ className: "dark-popup" })
-                .setLngLat(e.lngLat)
-                .setHTML(`<div style="color:#fff;font-size:14px"><strong>${name}</strong><br/>Coverage: ${(Number(p.coverage_pct) || 0).toFixed(1)}%</div>`)
-                .addTo(map);
+              const popup = new mb.Popup({ className: "dark-popup" }).setLngLat(e.lngLat).setHTML(`<div style="color:#fff;font-size:14px"><strong>${name}</strong><br/>Coverage: ${(Number(p.coverage_pct) || 0).toFixed(1)}%</div>`).addTo(map);
               activePopup.current = popup;
             });
             map.on("mouseenter", "neighborhoods-fill", () => { map.getCanvas().style.cursor = "pointer"; });
             map.on("mouseleave", "neighborhoods-fill", () => { map.getCanvas().style.cursor = ""; });
-
             setLayersReady(true);
-          } catch (e) {
-            console.error("neighborhoods error:", e);
-          }
+          } catch (e) { console.error("neighborhoods error:", e); }
 
-          // ── Park locations (green dots) ──
+          // ── Park locations ──
           try {
-            const { locations } = (await parkLocsPromise) as {
-              locations: Array<{ name: string; lng: number; lat: number }>;
-            };
-            map.addSource("parks", {
-              type: "geojson",
-              data: {
-                type: "FeatureCollection",
-                features: locations.map((p) => ({
-                  type: "Feature" as const,
-                  geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
-                  properties: { name: p.name },
-                })),
-              },
-            });
-            map.addLayer({
-              id: "parks-dots",
-              type: "circle",
-              source: "parks",
-              paint: {
-                "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 3, 13, 5, 16, 8],
-                "circle-color": "#22c55e",
-                "circle-opacity": 0.85,
-                "circle-stroke-width": 1,
-                "circle-stroke-color": "#16a34a",
-              },
-            });
-          } catch (e) {
-            console.error("parks error:", e);
-          }
+            const { locations } = await parkLocsP as { locations: Array<{ name: string; lng: number; lat: number }> };
+            map.addSource("parks", { type: "geojson", data: { type: "FeatureCollection", features: locations.map((p) => ({ type: "Feature" as const, geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] }, properties: { name: p.name } })) } });
+            map.addLayer({ id: "parks-dots", type: "circle", source: "parks", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 3, 13, 5, 16, 8], "circle-color": "#22c55e", "circle-opacity": 0.85, "circle-stroke-width": 1, "circle-stroke-color": "#16a34a" } });
+          } catch (e) { console.error("parks error:", e); }
         });
-      } catch (e) {
-        console.error("Map init error:", e);
-        setStatus("Failed to initialize map");
-      }
+      } catch (e) { console.error("Map init error:", e); setStatus("Failed to initialize map"); }
     }, 100);
 
     return () => clearInterval(interval);
@@ -431,33 +328,6 @@ export default function WalkMap({
     map.fitBounds([[minX, minY], [maxX, maxY]], { padding: responsivePadding(), duration: 800, maxZoom: 13 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boroughCodesKey, layersReady]);
-
-  // Render/clear suggested route as a dashed purple line.
-  useEffect(() => {
-    const map = mapInstance.current;
-    if (!map || !layersReady) return;
-
-    if (map.getLayer("suggested-route-layer")) map.removeLayer("suggested-route-layer");
-    if (map.getSource("suggested-route")) map.removeSource("suggested-route");
-
-    if (!suggestedRoute) return;
-
-    map.addSource("suggested-route", {
-      type: "geojson",
-      data: { type: "FeatureCollection", features: [suggestedRoute] },
-    });
-    map.addLayer({
-      id: "suggested-route-layer",
-      type: "line",
-      source: "suggested-route",
-      paint: {
-        "line-color": "#a78bfa",
-        "line-width": 4,
-        "line-opacity": 0.8,
-        "line-dasharray": [2, 1.5],
-      },
-    });
-  }, [suggestedRoute, layersReady]);
 
   return (
     <>
