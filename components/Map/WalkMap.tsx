@@ -8,6 +8,7 @@ interface WalkMapProps {
   hoveredNeighborhood?: string | null;
   selectedNeighborhood?: string | null;
   selectedBoroughCodes?: string[] | null;
+  suggestedRoute?: GeoJSON.Feature | null;
 }
 
 type GeoFeature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, unknown>>;
@@ -56,6 +57,7 @@ export default function WalkMap({
   hoveredNeighborhood,
   selectedNeighborhood,
   selectedBoroughCodes,
+  suggestedRoute,
 }: WalkMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<mapboxgl.Map | null>(null);
@@ -92,25 +94,29 @@ export default function WalkMap({
         const mb = win.mapboxgl!;
         mb.accessToken = mapboxToken;
 
-        // Resolve initial center: user position > data bounds > NYC default.
+        // Resolve the initial view BEFORE creating the map so there is
+        // never a zoom animation on open:
+        //   1. user position (zoom 14)
+        //   2. bounds of recent walks (last 14 days — the current city)
+        //   3. NYC default
         const [userPos, boundsData] = await Promise.all([userPosP, boundsP]);
-        let initCenter: [number, number] = [-73.935, 40.730];
-        let initZoom = 13;
-        if (userPos) {
-          initCenter = [userPos.lng, userPos.lat];
-          initZoom = 14;
-        } else if (boundsData.bounds) {
-          const [[w, s], [e, n]] = boundsData.bounds;
-          initCenter = [(w + e) / 2, (s + n) / 2];
-          initZoom = 12;
-        }
-
-        const map = new mb.Map({
+        const mapOptions: mapboxgl.MapOptions = {
           container: mapRef.current!,
           style: "mapbox://styles/mapbox/dark-v11",
-          center: initCenter,
-          zoom: initZoom,
-        });
+          center: [-73.935, 40.730],
+          zoom: 13,
+        };
+        if (userPos) {
+          mapOptions.center = [userPos.lng, userPos.lat];
+          mapOptions.zoom = 14;
+        } else if (boundsData.bounds) {
+          mapOptions.bounds = boundsData.bounds as [[number, number], [number, number]];
+          mapOptions.fitBoundsOptions = { padding: responsivePadding(), maxZoom: 14 };
+          delete mapOptions.center;
+          delete mapOptions.zoom;
+        }
+
+        const map = new mb.Map(mapOptions);
         mapInstance.current = map;
 
         // Silent location tracking via browser API — no mapbox control,
@@ -320,6 +326,33 @@ export default function WalkMap({
     map.fitBounds([[minX, minY], [maxX, maxY]], { padding: responsivePadding(), duration: 800, maxZoom: 13 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boroughCodesKey, layersReady]);
+
+  // Render/clear suggested route as a dashed purple line.
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !layersReady) return;
+
+    if (map.getLayer("suggested-route-layer")) map.removeLayer("suggested-route-layer");
+    if (map.getSource("suggested-route")) map.removeSource("suggested-route");
+
+    if (!suggestedRoute) return;
+
+    map.addSource("suggested-route", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [suggestedRoute] },
+    });
+    map.addLayer({
+      id: "suggested-route-layer",
+      type: "line",
+      source: "suggested-route",
+      paint: {
+        "line-color": "#a78bfa",
+        "line-width": 4,
+        "line-opacity": 0.8,
+        "line-dasharray": [2, 1.5],
+      },
+    });
+  }, [suggestedRoute, layersReady]);
 
   return (
     <>
