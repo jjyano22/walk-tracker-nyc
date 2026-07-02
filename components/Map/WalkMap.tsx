@@ -78,7 +78,6 @@ export default function WalkMap({
     const boundsP = fetch("/api/walks/bounds").then((r) => r.json()).catch(() => ({ bounds: null }));
     const ntaP = fetch("/data/nta-boundaries.geojson").then((r) => r.json());
     const nbStatsP = fetch("/api/neighborhoods").then((r) => r.json());
-    const parkLocsP = fetch("/api/park-locations").then((r) => r.json()).catch(() => ({ locations: [] }));
     const userPosP = getUserPosition();
 
     const win = window as unknown as { mapboxgl?: typeof mapboxgl };
@@ -278,13 +277,6 @@ export default function WalkMap({
             map.on("mouseleave", "neighborhoods-fill", () => { map.getCanvas().style.cursor = ""; });
             setLayersReady(true);
           } catch (e) { console.error("neighborhoods error:", e); }
-
-          // ── Park locations ──
-          try {
-            const { locations } = await parkLocsP as { locations: Array<{ name: string; lng: number; lat: number }> };
-            map.addSource("parks", { type: "geojson", data: { type: "FeatureCollection", features: locations.map((p) => ({ type: "Feature" as const, geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] }, properties: { name: p.name } })) } });
-            map.addLayer({ id: "parks-dots", type: "circle", source: "parks", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 3, 13, 5, 16, 8], "circle-color": "#22c55e", "circle-opacity": 0.85, "circle-stroke-width": 1, "circle-stroke-color": "#16a34a" } });
-          } catch (e) { console.error("parks error:", e); }
         });
       } catch (e) { console.error("Map init error:", e); setStatus("Failed to initialize map"); }
     }, 100);
