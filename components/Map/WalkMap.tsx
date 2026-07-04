@@ -158,12 +158,22 @@ export default function WalkMap({
           }
         });
 
+        // Mapbox fires "error" for plenty of recoverable things (a
+        // single tile 404, a slow terrain fetch). Only surface a
+        // friendly overlay if the map never finished loading — after
+        // load, log and move on so a stray tile error can't black out
+        // a working map. Never render raw error text (it can contain
+        // the tile URL and access token).
+        let mapLoaded = false;
         map.on("error", (e: mapboxgl.ErrorEvent) => {
           console.error("Map error:", e);
-          setStatus("Map error: " + (e.error?.message || "unknown"));
+          if (!mapLoaded) {
+            setStatus("Map failed to load — check your connection and reload.");
+          }
         });
 
         map.on("load", async () => {
+          mapLoaded = true;
           setStatus("");
 
           // ── Walked paths ──
