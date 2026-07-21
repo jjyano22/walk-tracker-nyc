@@ -47,14 +47,17 @@ export async function GET() {
     const totalMeters = walkedDistanceMeters(segments);
     const totalPoints = walkablePointIndices(segments).size;
 
-    return Response.json({
-      total_km: (totalMeters / 1000).toFixed(1),
-      total_miles: (totalMeters / 1609.34).toFixed(1),
-      neighborhoods_started: Number(neighborhoodStats.neighborhoods_started),
-      total_neighborhoods: Number(neighborhoodStats.total_neighborhoods),
-      best_coverage_pct: Number(neighborhoodStats.best_coverage).toFixed(1),
-      total_gps_points: totalPoints,
-    });
+    return Response.json(
+      {
+        total_km: (totalMeters / 1000).toFixed(1),
+        total_miles: (totalMeters / 1609.34).toFixed(1),
+        neighborhoods_started: Number(neighborhoodStats.neighborhoods_started),
+        total_neighborhoods: Number(neighborhoodStats.total_neighborhoods),
+        best_coverage_pct: Number(neighborhoodStats.best_coverage).toFixed(1),
+        total_gps_points: totalPoints,
+      },
+      { headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=3600" } }
+    );
   } catch (error) {
     console.error("Stats API error:", error);
     return Response.json(

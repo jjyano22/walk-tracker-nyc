@@ -10,7 +10,10 @@ export async function GET() {
       ORDER BY coverage_pct DESC, nta_name ASC
     `);
 
-    return Response.json({ neighborhoods: rows });
+    return Response.json(
+      { neighborhoods: rows },
+      { headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=3600" } }
+    );
   } catch (error) {
     console.error("Neighborhoods API error:", error);
     return Response.json({ neighborhoods: [] }, { status: 500 });

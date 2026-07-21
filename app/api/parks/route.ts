@@ -129,11 +129,14 @@ export async function GET() {
       }
     }
 
-    return Response.json({
-      visited: visitedParks.sort((a, b) => a.name.localeCompare(b.name)),
-      count: visitedParks.length,
-      total: parks.length,
-    });
+    return Response.json(
+      {
+        visited: visitedParks.sort((a, b) => a.name.localeCompare(b.name)),
+        count: visitedParks.length,
+        total: parks.length,
+      },
+      { headers: { "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400" } }
+    );
   } catch (error) {
     console.error("Parks API error:", error);
     return Response.json({ visited: [], count: 0, total: 0 }, { status: 500 });

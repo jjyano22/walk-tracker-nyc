@@ -20,15 +20,18 @@ export async function GET() {
        LIMIT 3`
     )) as unknown as NearCompletionRow[];
 
-    return Response.json({
-      near_completion: nearCompletion.map((r) => ({
-        nta_code: r.nta_code,
-        nta_name: r.nta_name,
-        borough: r.borough,
-        coverage_pct: Number(r.coverage_pct),
-        remaining_miles: Number(r.remaining_meters) / 1609.34,
-      })),
-    });
+    return Response.json(
+      {
+        near_completion: nearCompletion.map((r) => ({
+          nta_code: r.nta_code,
+          nta_name: r.nta_name,
+          borough: r.borough,
+          coverage_pct: Number(r.coverage_pct),
+          remaining_miles: Number(r.remaining_meters) / 1609.34,
+        })),
+      },
+      { headers: { "Cache-Control": "public, s-maxage=600, stale-while-revalidate=3600" } }
+    );
   } catch (error) {
     console.error("Next-up API error:", error);
     return Response.json({ near_completion: [] }, { status: 500 });

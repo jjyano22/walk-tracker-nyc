@@ -7,7 +7,6 @@ import BoroughRollup from "./BoroughRollup";
 import NextUp, { NextUpData } from "./NextUp";
 import RefreshButton from "./RefreshButton";
 import SuggestRoute from "./SuggestRoute";
-import DebugInfo from "./DebugInfo";
 
 interface Stats {
   total_km: string;
@@ -137,7 +136,6 @@ function SidebarBody({
         />
       </div>
 
-      <DebugInfo />
     </div>
   );
 }
@@ -191,9 +189,12 @@ export default function Sidebar({
       .then(setNextUp)
       .catch(console.error);
 
-    // Auto-process new GPS points in the background on every app open.
-    // If new points were processed, refresh stats + neighborhoods so
-    // coverage is current without the user having to tap Refresh.
+    // Auto-process new GPS points in the background, at most once every
+    // 30 minutes per device (DB data-transfer quota is finite; the
+    // Refresh button still forces it any time).
+    const lastRun = Number(localStorage.getItem("lastAutoProcess") || 0);
+    if (Date.now() - lastRun < 30 * 60 * 1000) return;
+    localStorage.setItem("lastAutoProcess", String(Date.now()));
     fetch("/api/process", { method: "POST" })
       .then((r) => r.json())
       .then((data) => {

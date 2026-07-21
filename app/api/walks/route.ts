@@ -133,7 +133,7 @@ export async function GET(request: Request) {
           // Serve from Vercel's CDN for a minute; refresh in the
           // background. Repeat opens are instant; new walks appear
           // within ~60s without any client change.
-          "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+          "Cache-Control": "public, s-maxage=300, stale-while-revalidate=3600",
         },
       }
     );
