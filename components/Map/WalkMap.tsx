@@ -40,10 +40,31 @@ function responsivePadding() {
     : { top: 60, bottom: 220, left: 40, right: 40 };
 }
 
-// Get user position silently (no prompt if already granted).
-function getUserPosition(): Promise<{ lng: number; lat: number } | null> {
+// True only when geolocation permission is ALREADY granted. Calling
+// getCurrentPosition/watchPosition in the "prompt" state pops the iOS
+// permission dialog — we never want to trigger that on open, so all
+// location use is gated behind this check. If the Permissions API is
+// unavailable, err on the side of never prompting.
+async function geolocationGranted(): Promise<boolean> {
+  if (!navigator.geolocation) return false;
+  try {
+    if (navigator.permissions?.query) {
+      const st = await navigator.permissions.query({
+        name: "geolocation" as PermissionName,
+      });
+      return st.state === "granted";
+    }
+  } catch {
+    // fall through
+  }
+  return false;
+}
+
+// Get user position silently — resolves null unless permission is
+// already granted, so this can never show a dialog.
+async function getUserPosition(): Promise<{ lng: number; lat: number } | null> {
+  if (!(await geolocationGranted())) return null;
   return new Promise((resolve) => {
-    if (!navigator.geolocation) { resolve(null); return; }
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve({ lng: pos.coords.longitude, lat: pos.coords.latitude }),
       () => resolve(null),
@@ -137,7 +158,10 @@ export default function WalkMap({
               "circle-stroke-color": "#fff",
             },
           });
-          if (navigator.geolocation) {
+          // Live position dot — only when permission is already
+          // granted, so this can never pop the iOS location dialog.
+          geolocationGranted().then((granted) => {
+            if (!granted) return;
             navigator.geolocation.watchPosition(
               (pos) => {
                 const src = map.getSource("user-location") as mapboxgl.GeoJSONSource | undefined;
@@ -155,7 +179,7 @@ export default function WalkMap({
               () => {},
               { enableHighAccuracy: true, maximumAge: 10000 }
             );
-          }
+          });
         });
 
         // Mapbox fires "error" for plenty of recoverable things (a
