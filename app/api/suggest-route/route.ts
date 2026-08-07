@@ -1,6 +1,7 @@
 import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 // Walking speed assumption: ~80 m/min (brisk walking).
 const WALK_SPEED_M_PER_MIN = 80;
@@ -53,21 +54,88 @@ interface OverpassWay {
   geometry?: Array<{ lat: number; lon: number }>;
 }
 
-// Fallback for anywhere the DB has no street data: pull walkable ways
-// around the user live from OpenStreetMap (Overpass API), and treat a
-// way as "walked" if the user's own GPS trace passes within ~25m of
-// its midpoint.
-async function candidatesFromOsm(
+type WalkedPt = { lat: number; lng: number };
+
+async function nearbyWalkedPoints(
   lat: number,
   lng: number,
   radius: number
+): Promise<WalkedPt[]> {
+  const walked = (await query(
+    `SELECT DISTINCT ROUND(lat::numeric, 4) AS lat, ROUND(lng::numeric, 4) AS lng
+     FROM gps_points
+     WHERE ST_DWithin(geom, ST_MakePoint($1, $2)::geography, $3)`,
+    [lng, lat, radius]
+  )) as unknown as Array<{ lat: string | number; lng: string | number }>;
+  return walked.map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }));
+}
+
+// Primary fallback outside NYC: Mapbox Tilequery on the streets
+// tileset. First-party (same token as the map + Directions), no
+// third-party rate limiting.
+async function candidatesFromTilequery(
+  lat: number,
+  lng: number,
+  radius: number,
+  token: string,
+  walkedPts: WalkedPt[]
+): Promise<CandidatePoint[]> {
+  const url =
+    `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${lng},${lat}.json` +
+    `?radius=${Math.round(radius)}&limit=50&layers=road&dedupe=true&access_token=${token}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error(`Tilequery ${res.status}`);
+  const data = (await res.json()) as GeoJSON.FeatureCollection;
+
+  const EXCLUDE = new Set([
+    "motorway", "motorway_link", "trunk", "trunk_link", "service",
+    "ferry", "aerialway", "golf",
+  ]);
+
+  const out: CandidatePoint[] = [];
+  for (const f of data.features ?? []) {
+    const cls = String((f.properties as Record<string, unknown> | null)?.class ?? "");
+    if (EXCLUDE.has(cls)) continue;
+
+    const g = f.geometry;
+    let coords: number[][] = [];
+    if (g.type === "LineString") coords = g.coordinates as number[][];
+    else if (g.type === "MultiLineString") coords = (g.coordinates as number[][][]).flat();
+    else if (g.type === "Point") coords = [g.coordinates as number[]];
+    if (coords.length === 0) continue;
+
+    let length = 0;
+    for (let i = 1; i < coords.length; i++) {
+      length += haversineMeters(coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]);
+    }
+    if (coords.length >= 2 && length < 20) continue;
+
+    const mid = coords[Math.floor(coords.length / 2)];
+    const isWalked = walkedPts.some(
+      (p) => haversineMeters(p.lat, p.lng, mid[1], mid[0]) < 25
+    );
+    if (isWalked) continue;
+
+    // Point-only results have no measurable length; assume a short block.
+    out.push({ lng: mid[0], lat: mid[1], length_meters: Math.max(length, 50) });
+  }
+  return out;
+}
+
+// Last-resort fallback: OpenStreetMap via the Kumi Overpass mirror
+// (the main overpass-api.de instance rate-limits datacenter IPs).
+async function candidatesFromOsm(
+  lat: number,
+  lng: number,
+  radius: number,
+  walkedPts: WalkedPt[]
 ): Promise<CandidatePoint[]> {
   const overpassQuery =
     `[out:json][timeout:8];` +
     `way["highway"~"^(residential|tertiary|secondary|primary|footway|path|pedestrian|living_street|unclassified)$"]` +
     `(around:${Math.round(radius)},${lat},${lng});out geom;`;
 
-  const res = await fetch("https://overpass-api.de/api/interpreter", {
+  const res = await fetch("https://overpass.kumi.systems/api/interpreter", {
     method: "POST",
     body: `data=${encodeURIComponent(overpassQuery)}`,
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -75,16 +143,6 @@ async function candidatesFromOsm(
   });
   if (!res.ok) throw new Error(`Overpass ${res.status}`);
   const data = (await res.json()) as { elements?: OverpassWay[] };
-
-  // The user's nearby GPS points, deduped to an ~11m grid, to filter
-  // out streets they've already covered.
-  const walked = (await query(
-    `SELECT DISTINCT ROUND(lat::numeric, 4) AS lat, ROUND(lng::numeric, 4) AS lng
-     FROM gps_points
-     WHERE ST_DWithin(geom, ST_MakePoint($1, $2)::geography, $3)`,
-    [lng, lat, radius]
-  )) as unknown as Array<{ lat: string | number; lng: string | number }>;
-  const walkedPts = walked.map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }));
 
   const candidates: CandidatePoint[] = [];
   for (const way of data.elements ?? []) {
@@ -136,17 +194,23 @@ export async function GET(request: Request) {
     const targetDistM = durationMin * WALK_SPEED_M_PER_MIN;
     const searchRadius = Math.min(targetDistM / 2, 2000);
 
-    // Seeded NYC data first; live OpenStreetMap anywhere else. Retry
-    // OSM at double radius for sparse rural areas.
+    // Seeded NYC data first; outside NYC fall back to live street
+    // lookups: Mapbox Tilequery (first-party, reliable), then an
+    // Overpass mirror as a last resort.
     let rows = await candidatesFromDb(userLat, userLng, searchRadius);
     if (rows.length < 3) {
+      const walkedPts = await nearbyWalkedPoints(userLat, userLng, searchRadius * 2);
       try {
-        rows = await candidatesFromOsm(userLat, userLng, searchRadius);
-        if (rows.length < 3) {
-          rows = await candidatesFromOsm(userLat, userLng, searchRadius * 2);
-        }
+        rows = await candidatesFromTilequery(userLat, userLng, searchRadius, token, walkedPts);
       } catch (e) {
-        console.error("OSM fallback error:", e);
+        console.error("Tilequery fallback error:", e);
+      }
+      if (rows.length < 3) {
+        try {
+          rows = await candidatesFromOsm(userLat, userLng, searchRadius, walkedPts);
+        } catch (e) {
+          console.error("OSM fallback error:", e);
+        }
       }
     }
 
