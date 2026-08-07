@@ -1,15 +1,114 @@
 import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
-export const revalidate = 0;
 
-// Walking speed assumption: ~80 m/min (brisk NYC walking).
+// Walking speed assumption: ~80 m/min (brisk walking).
 const WALK_SPEED_M_PER_MIN = 80;
 
-interface UnwalkedPoint {
+interface CandidatePoint {
   lng: number;
   lat: number;
   length_meters: number;
+}
+
+function haversineMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number
+): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// Candidate unwalked streets from the seeded street_segments table
+// (covers NYC only — seeded by scripts/prepare-streets.ts).
+async function candidatesFromDb(
+  lat: number,
+  lng: number,
+  radius: number
+): Promise<CandidatePoint[]> {
+  return (await query(
+    `SELECT
+       ST_X(ST_Centroid(ss.geom::geometry)) AS lng,
+       ST_Y(ST_Centroid(ss.geom::geometry)) AS lat,
+       ss.length_meters
+     FROM street_segments ss
+     LEFT JOIN walked_segments ws ON ss.osm_way_id = ws.osm_way_id
+     WHERE ws.osm_way_id IS NULL
+       AND ST_DWithin(ss.geom, ST_MakePoint($1, $2)::geography, $3)`,
+    [lng, lat, radius]
+  )) as unknown as CandidatePoint[];
+}
+
+interface OverpassWay {
+  type: string;
+  id: number;
+  geometry?: Array<{ lat: number; lon: number }>;
+}
+
+// Fallback for anywhere the DB has no street data: pull walkable ways
+// around the user live from OpenStreetMap (Overpass API), and treat a
+// way as "walked" if the user's own GPS trace passes within ~25m of
+// its midpoint.
+async function candidatesFromOsm(
+  lat: number,
+  lng: number,
+  radius: number
+): Promise<CandidatePoint[]> {
+  const overpassQuery =
+    `[out:json][timeout:8];` +
+    `way["highway"~"^(residential|tertiary|secondary|primary|footway|path|pedestrian|living_street|unclassified)$"]` +
+    `(around:${Math.round(radius)},${lat},${lng});out geom;`;
+
+  const res = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST",
+    body: `data=${encodeURIComponent(overpassQuery)}`,
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    signal: AbortSignal.timeout(9000),
+  });
+  if (!res.ok) throw new Error(`Overpass ${res.status}`);
+  const data = (await res.json()) as { elements?: OverpassWay[] };
+
+  // The user's nearby GPS points, deduped to an ~11m grid, to filter
+  // out streets they've already covered.
+  const walked = (await query(
+    `SELECT DISTINCT ROUND(lat::numeric, 4) AS lat, ROUND(lng::numeric, 4) AS lng
+     FROM gps_points
+     WHERE ST_DWithin(geom, ST_MakePoint($1, $2)::geography, $3)`,
+    [lng, lat, radius]
+  )) as unknown as Array<{ lat: string | number; lng: string | number }>;
+  const walkedPts = walked.map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }));
+
+  const candidates: CandidatePoint[] = [];
+  for (const way of data.elements ?? []) {
+    const geom = way.geometry;
+    if (!geom || geom.length < 2) continue;
+
+    let length = 0;
+    for (let i = 1; i < geom.length; i++) {
+      length += haversineMeters(
+        geom[i - 1].lat, geom[i - 1].lon,
+        geom[i].lat, geom[i].lon
+      );
+    }
+    if (length < 20) continue;
+
+    const mid = geom[Math.floor(geom.length / 2)];
+    const isWalked = walkedPts.some(
+      (p) => haversineMeters(p.lat, p.lng, mid.lat, mid.lon) < 25
+    );
+    if (isWalked) continue;
+
+    candidates.push({ lng: mid.lon, lat: mid.lat, length_meters: length });
+  }
+  return candidates;
 }
 
 export async function GET(request: Request) {
@@ -37,22 +136,23 @@ export async function GET(request: Request) {
     const targetDistM = durationMin * WALK_SPEED_M_PER_MIN;
     const searchRadius = Math.min(targetDistM / 2, 2000);
 
-    // Find unwalked street segment centroids nearby.
-    const rows = (await query(
-      `SELECT
-         ST_X(ST_Centroid(ss.geom::geometry)) AS lng,
-         ST_Y(ST_Centroid(ss.geom::geometry)) AS lat,
-         ss.length_meters
-       FROM street_segments ss
-       LEFT JOIN walked_segments ws ON ss.osm_way_id = ws.osm_way_id
-       WHERE ws.osm_way_id IS NULL
-         AND ST_DWithin(ss.geom, ST_MakePoint($1, $2)::geography, $3)`,
-      [userLng, userLat, searchRadius]
-    )) as unknown as UnwalkedPoint[];
+    // Seeded NYC data first; live OpenStreetMap anywhere else. Retry
+    // OSM at double radius for sparse rural areas.
+    let rows = await candidatesFromDb(userLat, userLng, searchRadius);
+    if (rows.length < 3) {
+      try {
+        rows = await candidatesFromOsm(userLat, userLng, searchRadius);
+        if (rows.length < 3) {
+          rows = await candidatesFromOsm(userLat, userLng, searchRadius * 2);
+        }
+      } catch (e) {
+        console.error("OSM fallback error:", e);
+      }
+    }
 
     if (rows.length < 3) {
       return Response.json({
-        error: "Not enough unwalked streets nearby. Try a different area!",
+        error: "Couldn't find enough streets nearby to build a route — try again in a minute.",
         unwalked_count: rows.length,
       });
     }
@@ -76,7 +176,7 @@ export async function GET(request: Request) {
       if (c.meters > best.meters) best = c;
     }
 
-    // Build loop waypoints: target + two flanking points at ±60°.
+    // Build loop waypoints: target + two flanking points.
     const bearingToTarget = bearing(userLat, userLng, best.lat, best.lng);
     const idealDist = targetDistM / 4;
 
@@ -91,7 +191,7 @@ export async function GET(request: Request) {
       snapToNearest(wp3, rows) ?? wp3,
     ];
 
-    // Build Mapbox Directions request: user → wp1 → wp2 → wp3 → user.
+    // Mapbox Directions: user → wp1 → wp2 → wp3 → user.
     const coords = [
       `${userLng},${userLat}`,
       ...waypoints.map((w) => `${w.lng},${w.lat}`),
@@ -106,10 +206,7 @@ export async function GET(request: Request) {
     if (!dirRes.ok) {
       const errText = await dirRes.text();
       console.error("Mapbox Directions error:", errText);
-      return Response.json(
-        { error: "Mapbox routing failed" },
-        { status: 502 }
-      );
+      return Response.json({ error: "Mapbox routing failed" }, { status: 502 });
     }
 
     const dirData = (await dirRes.json()) as {
@@ -122,10 +219,7 @@ export async function GET(request: Request) {
 
     const route = dirData.routes?.[0];
     if (!route) {
-      return Response.json(
-        { error: "No route found" },
-        { status: 404 }
-      );
+      return Response.json({ error: "No route found" }, { status: 404 });
     }
 
     return Response.json({
@@ -184,9 +278,9 @@ function pointAtBearing(
 
 function snapToNearest(
   target: { lat: number; lng: number },
-  points: UnwalkedPoint[]
+  points: CandidatePoint[]
 ): { lat: number; lng: number } | null {
-  let best: UnwalkedPoint | null = null;
+  let best: CandidatePoint | null = null;
   let bestDist = Infinity;
   for (const p of points) {
     const d = (p.lat - target.lat) ** 2 + (p.lng - target.lng) ** 2;
