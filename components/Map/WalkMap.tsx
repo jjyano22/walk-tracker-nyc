@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type mapboxgl from "mapbox-gl";
+import { cachedJson } from "@/lib/clientCache";
 
 interface WalkMapProps {
   onNeighborhoodClick?: (ntaCode: string, ntaName: string) => void;
@@ -96,11 +97,20 @@ export default function WalkMap({
     initialized.current = true;
 
     // Start data fetches + geolocation immediately, in parallel with
-    // mapbox CDN script load.
-    const walksP = fetch("/api/walks").then((r) => r.json());
-    const boundsP = fetch("/api/walks/bounds").then((r) => r.json()).catch(() => ({ bounds: null }));
+    // mapbox CDN script load. walks/bounds/neighborhoods hydrate from
+    // the last visit's localStorage snapshot for instant paint; the
+    // boundaries file is cached by the service worker instead (too big
+    // for localStorage).
+    const walksC = cachedJson<GeoJSON.FeatureCollection>("wt:walks", "/api/walks");
+    const boundsC = cachedJson<{ bounds: [[number, number], [number, number]] | null }>(
+      "wt:bounds",
+      "/api/walks/bounds"
+    );
     const ntaP = fetch("/data/nta-boundaries.geojson").then((r) => r.json());
-    const nbStatsP = fetch("/api/neighborhoods").then((r) => r.json());
+    const nbStatsC = cachedJson<{ neighborhoods: Array<{ nta_code: string; coverage_pct: number }> }>(
+      "wt:neighborhoods",
+      "/api/neighborhoods"
+    );
     const userPosP = getUserPosition();
 
     const win = window as unknown as { mapboxgl?: typeof mapboxgl };
@@ -110,8 +120,13 @@ export default function WalkMap({
       clearInterval(interval);
 
       try {
-        const res = await fetch("/api/config");
-        const { mapboxToken } = await res.json();
+        // NEXT_PUBLIC_* is inlined at build time — no round-trip. Keep
+        // /api/config as a fallback for older deployments.
+        let mapboxToken = (process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "").trim();
+        if (!mapboxToken) {
+          const res = await fetch("/api/config");
+          mapboxToken = (await res.json()).mapboxToken;
+        }
         const mb = win.mapboxgl!;
         mb.accessToken = mapboxToken;
 
@@ -120,7 +135,10 @@ export default function WalkMap({
         //   1. user position (zoom 14)
         //   2. bounds of recent walks (last 14 days — the current city)
         //   3. NYC default
-        const [userPos, boundsData] = await Promise.all([userPosP, boundsP]);
+        const [userPos, boundsData] = await Promise.all([
+          userPosP,
+          boundsC.cached ? Promise.resolve(boundsC.cached) : boundsC.fresh.catch(() => ({ bounds: null })),
+        ]);
         const mapOptions: mapboxgl.MapOptions = {
           container: mapRef.current!,
           style: "mapbox://styles/mapbox/dark-v11",
@@ -202,18 +220,33 @@ export default function WalkMap({
 
           // ── Walked paths ──
           try {
-            const walkGeo = await walksP;
-            map.addSource("walked-paths", { type: "geojson", data: walkGeo });
-
-            // Heatmap for low zoom visibility
-            const heatPts: GeoJSON.Feature[] = [];
-            for (const f of walkGeo.features ?? []) {
-              const coords: number[][] = f.geometry?.coordinates ?? [];
-              for (const c of coords) {
-                heatPts.push({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} });
+            const buildHeat = (geo: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => {
+              const heatPts: GeoJSON.Feature[] = [];
+              for (const f of geo.features ?? []) {
+                const coords: number[][] =
+                  (f.geometry as GeoJSON.LineString | undefined)?.coordinates ?? [];
+                for (const c of coords) {
+                  heatPts.push({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} });
+                }
               }
+              return { type: "FeatureCollection", features: heatPts };
+            };
+
+            const walkGeo = walksC.cached ?? (await walksC.fresh);
+            map.addSource("walked-paths", { type: "geojson", data: walkGeo });
+            map.addSource("walk-heat", { type: "geojson", data: buildHeat(walkGeo) });
+
+            // Swap in fresh data when it lands (no-op on first visit).
+            if (walksC.cached) {
+              walksC.fresh
+                .then((freshGeo) => {
+                  const src = map.getSource("walked-paths") as mapboxgl.GeoJSONSource | undefined;
+                  const heat = map.getSource("walk-heat") as mapboxgl.GeoJSONSource | undefined;
+                  if (src) src.setData(freshGeo);
+                  if (heat) heat.setData(buildHeat(freshGeo));
+                })
+                .catch(() => {});
             }
-            map.addSource("walk-heat", { type: "geojson", data: { type: "FeatureCollection", features: heatPts } });
             map.addLayer({
               id: "walk-heatmap", type: "heatmap", source: "walk-heat", maxzoom: 14,
               paint: {
@@ -240,10 +273,13 @@ export default function WalkMap({
             });
 
             const refreshSource = async () => {
-              const r = await fetch("/api/walks");
+              // Cache-buster: after a delete we need truth, not the
+              // CDN's 5-minute-stale copy.
+              const r = await fetch(`/api/walks?t=${Date.now()}`);
               const geo = await r.json();
               const src = map.getSource("walked-paths") as mapboxgl.GeoJSONSource | undefined;
               if (src) src.setData(geo);
+              try { localStorage.setItem("wt:walks", JSON.stringify(geo)); } catch {}
             };
 
             map.on("click", "walked-paths-hit", (e: mapboxgl.MapLayerMouseEvent) => {
@@ -288,7 +324,10 @@ export default function WalkMap({
 
           // ── Neighborhoods ──
           try {
-            const [ntaGeo, nbStats] = await Promise.all([ntaP, nbStatsP]);
+            const [ntaGeo, nbStats] = await Promise.all([
+              ntaP,
+              nbStatsC.cached ? Promise.resolve(nbStatsC.cached) : nbStatsC.fresh,
+            ]);
             const { neighborhoods } = nbStats;
             const coverage: Record<string, number> = {};
             for (const n of neighborhoods) coverage[n.nta_code] = Number(n.coverage_pct) || 0;

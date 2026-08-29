@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { hydrateJson } from "@/lib/clientCache";
 import OverallStats from "./OverallStats";
 import NeighborhoodList from "./NeighborhoodList";
 import BoroughRollup from "./BoroughRollup";
@@ -169,25 +170,20 @@ export default function Sidebar({
   };
 
   useEffect(() => {
-    fetch("/api/stats")
-      .then((r) => r.json())
-      .then(setStats)
-      .catch(console.error);
-
-    fetch("/api/neighborhoods")
-      .then((r) => r.json())
-      .then((data) => setNeighborhoods(data.neighborhoods || []))
-      .catch(console.error);
-
-    fetch("/api/parks")
-      .then((r) => r.json())
-      .then(setParks)
-      .catch(console.error);
-
-    fetch("/api/next-up")
-      .then((r) => r.json())
-      .then(setNextUp)
-      .catch(console.error);
+    // Paint instantly from the last visit's snapshot; fresh data swaps
+    // in when the network responds.
+    hydrateJson<Stats>("wt:stats", "/api/stats", setStats);
+    hydrateJson<{ neighborhoods: Neighborhood[] }>(
+      "wt:neighborhoods",
+      "/api/neighborhoods",
+      (d) => setNeighborhoods(d.neighborhoods || [])
+    );
+    hydrateJson<{ count: number; total: number; visited: Array<{ name: string; category: string }> }>(
+      "wt:parks",
+      "/api/parks",
+      setParks
+    );
+    hydrateJson<NextUpData>("wt:next-up", "/api/next-up", setNextUp);
 
     // Auto-process new GPS points in the background, at most once every
     // 30 minutes per device (DB data-transfer quota is finite; the

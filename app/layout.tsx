@@ -55,6 +55,9 @@ export default function RootLayout({
           src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"
           strategy="beforeInteractive"
         />
+        <Script id="sw-register" strategy="afterInteractive">
+          {`if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});`}
+        </Script>
         {children}
       </body>
     </html>
