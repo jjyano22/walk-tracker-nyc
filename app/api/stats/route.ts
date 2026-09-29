@@ -1,4 +1,4 @@
-import { query } from "@/lib/db";
+import { query, sampledGpsPointsSql } from "@/lib/db";
 import { homeExclusionSql } from "@/lib/home";
 import {
   classifySegments,
@@ -25,8 +25,7 @@ export async function GET() {
     // — auto-detected transit runs (run_type="transit") and manually-
     // tagged transit (subway/car/bike) are both excluded from distance.
     const rows = await query(
-      `SELECT lat, lng, timestamp FROM gps_points
-       WHERE ${homeExclusionSql()} ORDER BY timestamp ASC`
+      sampledGpsPointsSql(`WHERE ${homeExclusionSql()}`)
     );
     const points: RawPoint[] = (
       rows as unknown as Array<{

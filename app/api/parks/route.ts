@@ -1,4 +1,4 @@
-import { query } from "@/lib/db";
+import { query, sampledGpsPointsSql } from "@/lib/db";
 import { homeExclusionSql } from "@/lib/home";
 import {
   classifySegments,
@@ -72,8 +72,7 @@ export async function GET() {
     // and manually-tagged transit are both filtered out — a subway
     // under Prospect Park shouldn't mark it as "visited".
     const rows = await query(
-      `SELECT lat, lng, timestamp FROM gps_points
-       WHERE ${homeExclusionSql()} ORDER BY timestamp ASC`
+      sampledGpsPointsSql(`WHERE ${homeExclusionSql()}`)
     );
     const allPoints: RawPoint[] = (
       rows as unknown as Array<{

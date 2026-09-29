@@ -20,7 +20,12 @@ export function cachedJson<T>(
     // ignore quota / parse issues — treat as no cache
   }
   const fresh = fetch(url)
-    .then((r) => r.json())
+    .then((r) => {
+      // Never cache (or render) an error response — a transient 500
+      // would clobber the last good snapshot with empty data.
+      if (!r.ok) throw new Error(`${url} responded ${r.status}`);
+      return r.json();
+    })
     .then((data: T) => {
       try {
         localStorage.setItem(key, JSON.stringify(data));

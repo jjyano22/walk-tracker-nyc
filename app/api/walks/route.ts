@@ -1,4 +1,4 @@
-import { query } from "@/lib/db";
+import { query, sampledGpsPointsSql } from "@/lib/db";
 import { homeExclusionSql } from "@/lib/home";
 import {
   classifySegments,
@@ -93,9 +93,7 @@ export async function GET(request: Request) {
     const where = `WHERE ${conditions.join(" AND ")}`;
 
     const [rows, modes] = await Promise.all([
-      query(
-        `SELECT lat, lng, timestamp FROM gps_points ${where} ORDER BY timestamp ASC`
-      ),
+      query(sampledGpsPointsSql(where)),
       loadModes(),
     ]);
 
